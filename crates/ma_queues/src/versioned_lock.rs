@@ -8,7 +8,7 @@ use super::ReadError;
 /// A sequential lock
 #[repr(C, align(64))]
 pub struct VersionedLock<T> {
-    version: UnsafeCell<u32>,
+    version: UnsafeCell<usize>,
     data: UnsafeCell<T>,
 }
 unsafe impl<T: Send> Send for VersionedLock<T> {}
@@ -25,15 +25,15 @@ impl<T> VersionedLock<T> {
         }
     }
 
-    fn _set_version(&self, version: u32) {
+    fn _set_version(&self, version: usize) {
         unsafe { *self.version.get() = version }
     }
-    pub fn set_version(&self, version: u32) {
+    pub fn set_version(&self, version: usize) {
         assert!(version & 1 == 0);
         self._set_version(version)
     }
 
-    pub fn version(&self) -> u32 {
+    pub fn version(&self) -> usize {
         unsafe { *self.version.get() }
     }
 
@@ -43,7 +43,7 @@ impl<T> VersionedLock<T> {
     // if version changed -> got sped past because if v1 != expected_version it wouldn't even have started
     // reading
     #[inline]
-    pub fn read(&self, result: &mut T, expected_version: u32) -> Result<(), ReadError> {
+    pub fn read(&self, result: &mut T, expected_version: usize) -> Result<(), ReadError> {
         // Load the first sequence number. The acquire ordering ensures that
         // this is done before reading the data.
         let v1 = unsafe { *self.version.get() };
@@ -84,7 +84,7 @@ impl<T> VersionedLock<T> {
     }
 
     #[inline]
-    pub fn read_no_ver(&self, result: &mut T) -> u32{
+    pub fn read_no_ver(&self, result: &mut T) -> usize {
         loop {
             let v1 = unsafe { *self.version.get() };
 
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn lock_size() {
         use crate::messages::Message60;
-        assert_eq!(std::mem::size_of::<VersionedLock<Message60>>(), 64);
+        assert_eq!(std::mem::size_of::<VersionedLock<[u8; 48]>>(), 64);
         assert_eq!(std::mem::size_of::<VersionedLock<[u8; 61]>>(), 128)
     }
     #[test]

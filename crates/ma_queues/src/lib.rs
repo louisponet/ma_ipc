@@ -1,7 +1,7 @@
 use crate::messages::PublishArg;
 use std::{
     alloc::Layout,
-    sync::atomic::{fence, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use thiserror::Error;
 use versioned_lock::VersionedLock;
@@ -14,7 +14,7 @@ pub enum ReadError {
     Empty,
 }
 
-#[derive(Error, Debug, Copy, Clone)]
+#[derive(Error, Debug)]
 pub enum QueueError {
     #[error("Queue not initialized")]
     UnInitialized,
@@ -22,6 +22,9 @@ pub enum QueueError {
     LengthNotPowerOfTwo,
     #[error("Element size not power of two - 4")]
     ElementSizeNotPowerTwo,
+    #[cfg(feature="shmem")]
+    #[error("Shmem error")]
+    SharedMemoryError(#[from] shared_memory::ShmemError)
 }
 
 #[cfg(feature = "ffi")]
@@ -46,48 +49,8 @@ pub struct QueueHeader {
     is_initialized: u8,         // 3
     _pad1: u8,                  // 4
     elsize: u32,                // 8
-    bufsize: u32,               // 12
-    mask: u32,                  // 16
+    mask: usize,                // 16
     count: AtomicUsize,         // 24
-    start: *const u8
-}
-
-impl QueueHeader {
-    #[inline]
-    pub unsafe fn consume(
-        &self,
-        el: *mut u8,
-        pos: u32,
-        expected_version: u32,
-    ) -> Result<(), ReadError> {
-
-        let lock = self.start.offset((pos << self.elsize_shift_left_bits) as isize);
-        let v = lock as *const u32;
-        let dp = lock.offset(4);
-        let l = self.elsize as usize;
-
-        loop {
-            let v1 = *v;
-
-            fence(Ordering::Acquire);
-            if v1 < expected_version {
-                return Err(ReadError::Empty);
-            }
-            if v1 > expected_version {
-                return Err(ReadError::SpedPast);
-            }
-            el.copy_from(dp, l);
-            fence(Ordering::AcqRel);
-            let v2 = *v;
-            fence(Ordering::Acquire);
-            if v1 == v2 {
-                return Ok(());
-            } else {
-                return Err(ReadError::SpedPast);
-            }
-        }
-
-    }
 }
 
 fn power_of_two(mut v: usize) -> usize {
@@ -112,8 +75,6 @@ impl<T> Queue<T> {
         let size =
             std::mem::size_of::<QueueHeader>() + real_len * std::mem::size_of::<VersionedLock<T>>();
 
-        let q;
-
         unsafe {
             let ptr = std::alloc::alloc_zeroed(
                 Layout::array::<u8>(size)
@@ -124,64 +85,42 @@ impl<T> Queue<T> {
             );
             // Why real len you may ask. The size of the fat pointer ONLY includes the length of the
             // unsized part of the struct i.e. the buffer.
-            q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, real_len) as *mut Queue<T>);
+            Self::from_uninitialized_ptr(ptr, real_len, queue_type)
         }
-
-        q.init(queue_type, len)?;
-        Ok(q)
     }
 
-    fn init(&mut self, queue_type: QueueType, len: usize) -> Result<(), QueueError> {
-        let elsize = std::mem::size_of::<VersionedLock<T>>();
-        if !len.is_power_of_two() {
-            return Err(QueueError::LengthNotPowerOfTwo);
-        }
 
-        let mask = len - 1;
-
-        self.header.queue_type = queue_type;
-        self.header.elsize_shift_left_bits = power_of_two(elsize) as u8;
-        self.header.bufsize = len as u32;
-        self.header.mask = mask as u32;
-        self.header.elsize = elsize as u32;
-        self.header.start = unsafe{(self as *const _ as *const u8).offset(64)};
-        self.header.is_initialized = true as u8;
-        Ok(())
-    }
-
-    pub fn init_header(ptr: *mut u8, queue_type: QueueType, len: u32) -> Result<(), QueueError> {
-        let elsize = std::mem::size_of::<VersionedLock<T>>();
-        if !elsize.is_power_of_two() {
-            return Err(QueueError::ElementSizeNotPowerTwo);
-        }
-        if !len.is_power_of_two() {
-            return Err(QueueError::LengthNotPowerOfTwo);
-        }
-
-        let mask = len - 1;
-
-        unsafe {
-            let s = std::slice::from_raw_parts_mut(ptr, 1024);
-            let header = &mut *(s as *mut _ as *mut QueueHeader) as &mut QueueHeader;
-            header.queue_type = queue_type;
-
-            header.elsize_shift_left_bits = power_of_two(elsize) as u8;
-            header.bufsize = len as u32;
-            header.mask = mask as u32;
-            header.elsize = elsize as u32;
-            header.is_initialized = true as u8;
-        }
-        Ok(())
-    }
-
-    pub const fn size_of(len: u32) -> usize {
+    pub const fn size_of(len: usize) -> usize {
         std::mem::size_of::<QueueHeader>()
-            + (len.next_power_of_two() as usize) * std::mem::size_of::<VersionedLock<T>>()
+            + len.next_power_of_two() * std::mem::size_of::<VersionedLock<T>>()
     }
 
-    pub fn from_ptr(ptr: *mut QueueHeader) -> Result<&'static Self, QueueError> {
+    fn from_uninitialized_ptr(ptr: *mut u8, len: usize, queue_type: QueueType) -> Result<&'static Self, QueueError> {
+        if !len.is_power_of_two() {
+            return Err(QueueError::LengthNotPowerOfTwo);
+        }
         unsafe {
-            let len = (*ptr).bufsize;
+            let q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, len) as *mut Queue<T>);
+            let elsize = std::mem::size_of::<VersionedLock<T>>();
+            if !len.is_power_of_two() {
+                return Err(QueueError::LengthNotPowerOfTwo);
+            }
+
+            let mask = len - 1;
+
+            q.header.queue_type = queue_type;
+            q.header.elsize_shift_left_bits = power_of_two(elsize) as u8;
+            q.header.mask = mask;
+            q.header.elsize = elsize as u32;
+            q.header.is_initialized = true as u8;
+            Ok(q)
+        }
+    }
+
+
+    fn from_initialized_ptr(ptr: *mut QueueHeader) -> Result<&'static Self, QueueError> {
+        unsafe {
+            let len = (*ptr).mask + 1;
             if !len.is_power_of_two() {
                 return Err(QueueError::LengthNotPowerOfTwo);
             }
@@ -190,7 +129,7 @@ impl<T> Queue<T> {
             }
 
             Ok(
-                &*(std::ptr::slice_from_raw_parts_mut(ptr, (*ptr).bufsize as usize)
+                &*(std::ptr::slice_from_raw_parts_mut(ptr, len)
                     as *const Queue<T>),
             )
         }
@@ -201,13 +140,13 @@ impl<T> Queue<T> {
         self.header.count.load(Ordering::Relaxed)
     }
 
-    fn next_pos(&self) -> u32 {
+    fn next_pos(&self) -> usize {
         match &self.header.queue_type {
             QueueType::Unknown => panic!("Unknown queue"),
             QueueType::MPMC => {
-                self.header.count.fetch_add(1, Ordering::AcqRel) as u32 & self.header.mask
+                self.header.count.fetch_add(1, Ordering::AcqRel) & self.header.mask
             }
-            QueueType::SPMC => self.header.count.load(Ordering::Relaxed) as u32 & self.header.mask,
+            QueueType::SPMC => self.header.count.load(Ordering::Relaxed) & self.header.mask,
         }
     }
 
@@ -226,16 +165,16 @@ impl<T> Queue<T> {
         }
     }
 
-    fn load(&self, pos: u32) -> &VersionedLock<T> {
-        unsafe { self.buffer.get_unchecked(pos as usize) }
+    fn load(&self, pos: usize) -> &VersionedLock<T> {
+        unsafe { self.buffer.get_unchecked(pos) }
     }
 
-    fn cur_pos(&self) -> u32 {
-        self.count() as u32 & self.header.mask
+    fn cur_pos(&self) -> usize {
+        self.count() & self.header.mask
     }
 
-    fn version(&self) -> u32 {
-        (((self.count() / (self.header.mask as usize + 1)) << 1) + 2) as u32
+    fn version(&self) -> usize {
+        ((self.count() / (self.header.mask + 1)) << 1) + 2
     }
 
     fn produce(&self, item: &T) {
@@ -252,16 +191,13 @@ impl<T> Queue<T> {
         self.update_pos();
     }
 
-    fn consume(&self, el: &mut T, ri: u32, ri_ver: u32) -> Result<(), ReadError> {
+    fn consume(&self, el: &mut T, ri: usize, ri_ver: usize) -> Result<(), ReadError> {
         self.load(ri).read(el, ri_ver)
     }
 
-    fn consume_danger(&self, el: &mut T, ri: u32, ri_ver: u32) -> Result<(), ReadError> {
-        unsafe{self.header.consume(el as *mut _ as *mut u8, ri, ri_ver)}
-    }
 
     fn len(&self) -> usize {
-        self.header.bufsize as usize
+        self.header.mask + 1
     }
 
     // This exists just to check the state of the queue for debugging purposes
@@ -270,7 +206,7 @@ impl<T> Queue<T> {
         let mut prev_v = self.load(0).version();
         let mut n_changes = 0;
         for i in 1..=self.header.mask {
-            let lck = self.load(i as u32);
+            let lck = self.load(i);
             let v = lck.version();
             if v != prev_v && v & 1 == 0 {
                 n_changes += 1;
@@ -335,6 +271,32 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Queue<T> {
     }
 }
 
+#[cfg(feature="shmem")]
+impl<T> Queue<T> {
+    pub fn shared<P: AsRef<std::path::Path>>(shmem_flink: P, size: usize, typ: QueueType) -> Result<&'static Self, QueueError> {
+        use shared_memory::{ShmemConf, ShmemError};
+        match ShmemConf::new().size(Self::size_of(size)).flink(&shmem_flink).create() {
+            Ok(shmem) => {
+                eprintln!("got here2");
+                let ptr = shmem.as_ptr();
+                std::mem::forget(shmem);
+                Self::from_uninitialized_ptr(ptr, size, typ)
+            },
+            Err(ShmemError::LinkExists) => {
+                eprintln!("got here1");
+                let shmem = ShmemConf::new().flink(shmem_flink).open().unwrap();
+                let ptr = shmem.as_ptr() as *mut QueueHeader;
+                std::mem::forget(shmem);
+                Self::from_initialized_ptr(ptr)
+            },
+            Err(e) => {
+                eprintln!("Unable to create or open shmem flink {:?} : {e}", shmem_flink.as_ref());
+                Err(e.into())
+            }
+        }
+    }
+}
+
 /// Simply exists for the automatic produce_first
 #[repr(C, align(64))]
 pub struct Producer<'a, T> {
@@ -376,12 +338,12 @@ impl<'a, T> Producer<'a, T> {
 pub struct Consumer<'a, T> {
     /// Shared reference to the channel
     /// Read index pointer
-    pos: u32, // 4
-    mask: u32,             // 8
-    expected_version: u32, // 12
-    is_running: u8,        // 13
-    _pad: [u8; 3],         // 16
-    queue: &'a Queue<T>,   //32 fat ptr: (usize, pointer)
+    pos: usize, // 8
+    mask: usize,             // 16
+    expected_version: usize, // 24
+    is_running: u8,          // 25
+    _pad: [u8; 7],           // 32
+    queue: &'a Queue<T>,     // 48 fat ptr: (usize, pointer)
 }
 
 impl<'a, T> Consumer<'a, T> {
@@ -391,7 +353,7 @@ impl<'a, T> Consumer<'a, T> {
 
     fn update_pos(&mut self) {
         self.pos = (self.pos + 1) & self.mask;
-        self.expected_version += 2 * (self.pos == 0) as u32;
+        self.expected_version += 2 * (self.pos == 0) as usize;
     }
 
     /// Nonblocking consume returning either Ok(()) or a ReadError
@@ -400,33 +362,11 @@ impl<'a, T> Consumer<'a, T> {
         self.update_pos();
         Ok(())
     }
-    /// Nonblocking consume returning either Ok(()) or a ReadError
-    pub fn try_consume_danger(&mut self, el: &mut T) -> Result<(), ReadError> {
-        self.queue.consume_danger(el, self.pos, self.expected_version)?;
-        self.update_pos();
-        Ok(())
-    }
 
     /// Blocking consume
     pub fn consume(&mut self, el: &mut T) {
         loop {
             match self.try_consume(el) {
-                Ok(_) => {
-                    return;
-                }
-                Err(ReadError::Empty) => {
-                    continue;
-                }
-                Err(ReadError::SpedPast) => {
-                    self.recover_after_error();
-                }
-            }
-        }
-    }
-    /// Blocking consume
-    pub fn consume_danger(&mut self, el: &mut T) {
-        loop {
-            match self.try_consume_danger(el) {
                 Ok(_) => {
                     return;
                 }
@@ -457,7 +397,7 @@ impl<'a, T> From<&'a Queue<T>> for Consumer<'a, T> {
         Self {
             pos,
             mask: queue.header.mask,
-            _pad: [0; 3],
+            _pad: [0; 7],
             expected_version,
             is_running: 1,
             queue,
@@ -570,5 +510,37 @@ mod queue {
     #[test]
     fn multithread_8_8() {
         multithread(8, 8, 100000);
+    }
+    #[test]
+    #[cfg(feature="shmem")]
+    fn basic_shared() {
+        for typ in [QueueType::SPMC, QueueType::MPMC] {
+            let path = std::path::Path::new("/dev/shm/blabla_test");
+            let q = Queue::shared(&path, 16, typ).unwrap();
+            let mut p = Producer::from(&*q);
+            let mut c = Consumer::from(&*q);
+            p.produce(&1);
+            let mut m = 0;
+
+            assert_eq!(c.try_consume(&mut m), Ok(()));
+            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
+            assert_eq!(m, 1);
+            for i in 0..16 {
+                p.produce(&i);
+            }
+            for i in 0..16 {
+                c.try_consume(&mut m).unwrap();
+                assert_eq!(m, i);
+            }
+
+            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
+
+            for i in 0..20 {
+                p.produce(&1);
+            }
+
+            assert!(matches!(c.try_consume(&mut m), Err(ReadError::SpedPast)));
+            std::fs::remove_file(&path);
+        }
     }
 }

@@ -25,6 +25,7 @@ proc-macro2 = "^1.0"
 quote = "^1.0"
 log = "^0.4"
 thiserror = "^1.0"
+shared_memory="^0.12"
 
 [profile.dev.package."*"]
 opt-level = 2

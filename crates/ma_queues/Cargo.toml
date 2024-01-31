@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 ma_ffi = {workspace = true, optional = true}
+shared_memory = {workspace = true, optional = true}
 
 log.workspace = true
 thiserror.workspace = true
@@ -19,6 +20,7 @@ quanta.workspace = true
 
 [features]
 ffi = ["dep:ma_ffi"]
+shmem = ["dep:shared_memory"]
 default = []
 
 [[bench]]
