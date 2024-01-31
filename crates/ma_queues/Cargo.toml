@@ -1,0 +1,29 @@
+[package]
+name = "ma_queues"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+ma_ffi = {workspace = true, optional = true}
+
+log.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+core_affinity.workspace = true
+quanta.workspace = true
+
+[features]
+ffi = ["dep:ma_ffi"]
+default = []
+
+[[bench]]
+name = "versioned_lock"
+harness = false
+[[bench]]
+name = "queues"
+harness = false

@@ -1,0 +1,8 @@
+rustflags = ["-C", "target-cpu=native"]
+# [target.x86_64-unknown-linux-gnu]
+# # , "-C", "linker=clang", "-Clinker-plugin-lto", "-C", "link-arg=-fuse-ld=lld"]
+# [target.x86_64-pc-linux-gnu]
+# rustflags = ["-C", "target-cpu=native"]
+# # , "-C", "linker=clang", "-Clinker-plugin-lto", "-C", "link-arg=-fuse-ld=lld"]
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "target-cpu=native"]
