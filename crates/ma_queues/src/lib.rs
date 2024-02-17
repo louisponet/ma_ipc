@@ -277,13 +277,11 @@ impl<T> Queue<T> {
         use shared_memory::{ShmemConf, ShmemError};
         match ShmemConf::new().size(Self::size_of(size)).flink(&shmem_flink).create() {
             Ok(shmem) => {
-                eprintln!("got here2");
                 let ptr = shmem.as_ptr();
                 std::mem::forget(shmem);
                 Self::from_uninitialized_ptr(ptr, size, typ)
             },
             Err(ShmemError::LinkExists) => {
-                eprintln!("got here1");
                 let shmem = ShmemConf::new().flink(shmem_flink).open().unwrap();
                 let ptr = shmem.as_ptr() as *mut QueueHeader;
                 std::mem::forget(shmem);
