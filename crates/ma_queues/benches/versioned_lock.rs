@@ -1,4 +1,3 @@
-use core::panic;
 use std::{sync::{atomic::Ordering, self, Arc}, arch::x86_64::__rdtscp, time::Duration};
 
 use core_affinity::CoreId;
@@ -189,7 +188,7 @@ fn read_into(c: &mut Criterion) {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct TimingMessage<const N: usize> {
     rdtsc: u64,
     data: [u8; N]

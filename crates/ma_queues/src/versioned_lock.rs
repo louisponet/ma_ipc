@@ -15,7 +15,7 @@ unsafe impl<T: Send> Send for VersionedLock<T> {}
 unsafe impl<T: Send> Sync for VersionedLock<T> {}
 
 // TODO: Try 32 bit version
-impl<T> VersionedLock<T> {
+impl<T: Copy> VersionedLock<T> {
     /// Creates a new SeqLock with the given initial value.
     #[inline]
     pub const fn new(val: T) -> VersionedLock<T> {
@@ -190,7 +190,6 @@ mod tests {
 
     #[test]
     fn lock_size() {
-        use crate::messages::Message60;
         assert_eq!(std::mem::size_of::<VersionedLock<[u8; 48]>>(), 64);
         assert_eq!(std::mem::size_of::<VersionedLock<[u8; 61]>>(), 128)
     }

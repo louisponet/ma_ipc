@@ -14,7 +14,7 @@ pub struct SeqlockVector<T> {
     header: VectorHeader,
     buffer: [VersionedLock<T>],
 }
-impl<T> SeqlockVector<T> {
+impl<T: Copy> SeqlockVector<T> {
     pub fn new(len: usize) -> &'static Self {
         // because we don't need len to be power of 2
         let size = std::mem::size_of::<VectorHeader>()

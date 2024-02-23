@@ -68,7 +68,7 @@ pub struct Queue<T> {
     buffer: [versioned_lock::VersionedLock<T>],
 }
 
-impl<T> Queue<T> {
+impl<T: Copy> Queue<T> {
     /// Allocs (unshared) memory and initializes a new queue from it
     pub fn new(len: usize, queue_type: QueueType) -> Result<&'static Self, QueueError> {
         let real_len = len.next_power_of_two();
@@ -272,7 +272,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Queue<T> {
 }
 
 #[cfg(feature="shmem")]
-impl<T> Queue<T> {
+impl<T: Copy> Queue<T> {
     pub fn shared<P: AsRef<std::path::Path>>(shmem_flink: P, size: usize, typ: QueueType) -> Result<&'static Self, QueueError> {
         use shared_memory::{ShmemConf, ShmemError};
         match ShmemConf::new().size(Self::size_of(size)).flink(&shmem_flink).create() {
@@ -303,7 +303,7 @@ pub struct Producer<'a, T> {
     pub queue: &'a Queue<T>,
 }
 
-impl<'a, T> From<&'a Queue<T>> for Producer<'a, T> {
+impl<'a, T: Copy> From<&'a Queue<T>> for Producer<'a, T> {
     fn from(queue: &'a Queue<T>) -> Self {
         Self {
             produced_first: 0,
@@ -312,7 +312,7 @@ impl<'a, T> From<&'a Queue<T>> for Producer<'a, T> {
     }
 }
 
-impl<'a, T> Producer<'a, T> {
+impl<'a, T: Copy> Producer<'a, T> {
     pub fn produce(&mut self, msg: &T) {
         if self.produced_first == 0 {
             self.queue.produce_first(msg);
@@ -344,7 +344,7 @@ pub struct Consumer<'a, T> {
     queue: &'a Queue<T>,     // 48 fat ptr: (usize, pointer)
 }
 
-impl<'a, T> Consumer<'a, T> {
+impl<'a, T: Copy> Consumer<'a, T> {
     pub fn recover_after_error(&mut self) {
         self.expected_version += 2
     }
@@ -388,7 +388,7 @@ impl<'a, T> Consumer<'a, T> {
     }
 }
 
-impl<'a, T> From<&'a Queue<T>> for Consumer<'a, T> {
+impl<'a, T: Copy> From<&'a Queue<T>> for Consumer<'a, T> {
     fn from(queue: &'a Queue<T>) -> Self {
         let pos = queue.cur_pos();
         let expected_version = queue.version();
