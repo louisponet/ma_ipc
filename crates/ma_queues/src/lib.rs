@@ -140,29 +140,18 @@ impl<T: Copy> Queue<T> {
         self.header.count.load(Ordering::Relaxed)
     }
 
-    fn next_pos(&self) -> usize {
-        match &self.header.queue_type {
+    fn next_count(&self) -> usize {
+        match self.header.queue_type {
             QueueType::Unknown => panic!("Unknown queue"),
-            QueueType::MPMC => {
-                self.header.count.fetch_add(1, Ordering::AcqRel) & self.header.mask
-            }
-            QueueType::SPMC => self.header.count.load(Ordering::Relaxed) & self.header.mask,
-        }
-    }
-
-    fn update_pos(&self) {
-        match &self.header.queue_type {
-            QueueType::Unknown => {
-                panic!("Unknown Queue type")
-            }
-            QueueType::MPMC => {}
-            QueueType::SPMC => {
-                let c = self.header.count.load(Ordering::Relaxed);
-                self.header
-                    .count
-                    .store(c.wrapping_add(1), Ordering::Relaxed);
+            QueueType::MPMC =>self.header.count.fetch_add(1, Ordering::AcqRel) ,
+            QueueType::SPMC =>
+                {
+                    let c = self.header.count.load(Ordering::Relaxed);
+                    self.header.count.store(c.wrapping_add(1), Ordering::Relaxed);
+                    c
             }
         }
+        
     }
 
     fn load(&self, pos: usize) -> &VersionedLock<T> {
@@ -177,18 +166,23 @@ impl<T: Copy> Queue<T> {
         ((self.count() / (self.header.mask + 1)) << 1) + 2
     }
 
-    fn produce(&self, item: &T) {
-        let p = self.next_pos();
-        let lock = self.load(p);
-        lock.write(item);
-        self.update_pos();
+    fn version_of(&self, pos: usize) -> usize {
+        self.load(pos).version()
     }
 
-    fn produce_arg(&self, item: &PublishArg) {
-        let p = self.next_pos();
-        let lock = self.load(p);
+    // returns the current count 
+    fn produce(&self, item: &T) -> usize {
+        let p = self.next_count();
+        let lock = self.load(p & self.header.mask);
+        lock.write(item);
+        p
+    }
+
+    fn produce_arg(&self, item: &PublishArg) -> usize{
+        let p = self.next_count();
+        let lock = self.load(p & self.header.mask);
         lock.write_arg(item);
-        self.update_pos();
+        p
     }
 
     fn consume(&self, el: &mut T, ri: usize, ri_ver: usize) -> Result<(), ReadError> {
@@ -219,45 +213,45 @@ impl<T: Copy> Queue<T> {
         }
     }
 
-    fn produce_first(&self, item: &T) {
+    fn produce_first(&self, item: &T) -> usize{
         // we check whether the version in the previous lock is different
         // to the one we are going to write to, otherwise there's something wrong
         // most likely the count we read from the shmem is not actually
         // the last written one. Cache not being flushed to shmem when producer
         // dies.
         loop {
-            let p = self.next_pos();
-            let prev_pos = if p == 0 { self.header.mask } else { p - 1 };
+            let m = self.header.mask;
+            let c = self.next_count();
+            let p = c & m;
+            let prev_pos = if p == 0 { m } else { p - 1 };
             let prev_version = self.load(prev_pos).version();
             let lock = self.load(p);
             let curv = lock.version();
             if curv != prev_version || (p == 0 && curv == prev_version) {
                 lock.write_unpoison(item);
-                self.update_pos();
-                break;
+                return c;
             }
-            self.update_pos();
         }
     }
 
-    fn produce_first_arg(&self, item: &PublishArg) {
+    fn produce_first_arg(&self, item: &PublishArg) -> usize {
         // we check whether the version in the previous lock is different
         // to the one we are going to write to, otherwise there's something wrong
         // most likely the count we read from the shmem is not actually
         // the last written one. Cache not being flushed to shmem when producer
         // dies.
         loop {
-            let p = self.next_pos();
-            let prev_pos = if p == 0 { self.header.mask } else { p - 1 };
+            let m = self.header.mask;
+            let c = self.next_count();
+            let p = c & m;
+            let prev_pos = if p == 0 { m } else { p - 1 };
             let prev_version = self.load(prev_pos).version();
             let lock = self.load(p);
             let curv = lock.version();
             if curv != prev_version || (p == 0 && curv == prev_version) {
                 lock.write_unpoison_arg(item);
-                self.update_pos();
-                break;
+                return c;
             }
-            self.update_pos();
         }
     }
 }
@@ -313,18 +307,18 @@ impl<'a, T: Copy> From<&'a Queue<T>> for Producer<'a, T> {
 }
 
 impl<'a, T: Copy> Producer<'a, T> {
-    pub fn produce(&mut self, msg: &T) {
+    pub fn produce(&mut self, msg: &T) -> usize {
         if self.produced_first == 0 {
-            self.queue.produce_first(msg);
-            self.produced_first = 1
+            self.produced_first = 1;
+            self.queue.produce_first(msg)
         } else {
             self.queue.produce(msg)
         }
     }
-    pub fn produce_arg(&mut self, msg: &PublishArg) {
+    pub fn produce_arg(&mut self, msg: &PublishArg) -> usize {
         if self.produced_first == 0 {
-            self.queue.produce_first_arg(msg);
-            self.produced_first = 1
+            self.produced_first = 1;
+            self.queue.produce_first_arg(msg)
         } else {
             self.queue.produce_arg(msg)
         }
@@ -346,7 +340,10 @@ pub struct Consumer<'a, T> {
 
 impl<'a, T: Copy> Consumer<'a, T> {
     pub fn recover_after_error(&mut self) {
-        self.expected_version += 2
+        while self.queue.version_of(self.pos) > self.expected_version {
+            self.update_pos()
+        }
+        // self.expected_version += 2;
     }
 
     fn update_pos(&mut self) {
