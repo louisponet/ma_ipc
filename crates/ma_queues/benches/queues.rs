@@ -101,7 +101,7 @@ fn consume(c: &mut Criterion) {
         group.finish();
     }
 }
-
+// this is max contention
 fn produce_bench_spmc<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize) {
     std::thread::scope(|s| {
         let q = ma_queues::Queue::new(4096, ma_queues::QueueType::SPMC).unwrap();
@@ -114,7 +114,7 @@ fn produce_bench_spmc<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize)
                 let mut m = [0u8; N_BYTES];
                 loop {
                     lock2.consume(&mut m);
-                    std::thread::yield_now();
+                    // std::thread::yield_now();
                     if m[0] == 1 && m[i] == 2 || done1.load(Ordering::Relaxed){
                         break;
                     }
@@ -127,8 +127,15 @@ fn produce_bench_spmc<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize)
             core_affinity::set_for_current(CoreId { id: 0});
             let mut lock2 = ma_queues::Producer::from(q);
             let mut m = [0u8; N_BYTES];
-            b.iter(|| {
-                lock2.produce(&mut m);
+            b.iter_custom(|b| {
+                let mut tot = std::time::Duration::ZERO;
+                for _ in 0..b {
+                    std::thread::yield_now(); //just for a bit of delaying vs readers
+                    let t = std::time::Instant::now();
+                    lock2.produce(&mut m);
+                    tot += t.elapsed();
+                }
+                tot
             });
             done.store(true, Ordering::Relaxed);
             m[0] = 1;
