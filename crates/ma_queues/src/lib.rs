@@ -325,6 +325,12 @@ impl<'a, T: Copy> Producer<'a, T> {
     }
 }
 
+impl<'a, T> AsMut<Producer<'a, T>> for Producer<'a, T> {
+    fn as_mut(&mut self) -> &mut Producer<'a, T> {
+        self
+    }
+}
+
 #[repr(C, align(64))]
 #[derive(Debug)]
 pub struct Consumer<'a, T> {
@@ -382,6 +388,12 @@ impl<'a, T: Copy> Consumer<'a, T> {
             (*consumer_ptr).mask = queue.header.mask;
             (*consumer_ptr).queue = queue
         }
+    }
+}
+
+impl<'a, T> AsMut<Consumer<'a, T>> for Consumer<'a, T> {
+    fn as_mut(&mut self) -> &mut Consumer<'a, T> {
+        self
     }
 }
 
