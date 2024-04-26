@@ -21,7 +21,7 @@ quanta.workspace = true
 [features]
 ffi = ["dep:ma_ffi"]
 shmem = ["dep:shared_memory"]
-default = []
+default = ["shmem"]
 
 [[bench]]
 name = "versioned_lock"

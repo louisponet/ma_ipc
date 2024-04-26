@@ -22,9 +22,9 @@ pub enum QueueError {
     LengthNotPowerOfTwo,
     #[error("Element size not power of two - 4")]
     ElementSizeNotPowerTwo,
-    #[cfg(feature="shmem")]
+    #[cfg(feature = "shmem")]
     #[error("Shmem error")]
-    SharedMemoryError(#[from] shared_memory::ShmemError)
+    SharedMemoryError(#[from] shared_memory::ShmemError),
 }
 
 #[cfg(feature = "ffi")]
@@ -89,13 +89,16 @@ impl<T: Copy> Queue<T> {
         }
     }
 
-
     pub const fn size_of(len: usize) -> usize {
         std::mem::size_of::<QueueHeader>()
             + len.next_power_of_two() * std::mem::size_of::<VersionedLock<T>>()
     }
 
-    fn from_uninitialized_ptr(ptr: *mut u8, len: usize, queue_type: QueueType) -> Result<&'static Self, QueueError> {
+    fn from_uninitialized_ptr(
+        ptr: *mut u8,
+        len: usize,
+        queue_type: QueueType,
+    ) -> Result<&'static Self, QueueError> {
         if !len.is_power_of_two() {
             return Err(QueueError::LengthNotPowerOfTwo);
         }
@@ -117,7 +120,7 @@ impl<T: Copy> Queue<T> {
         }
     }
 
-
+    #[allow(dead_code)]
     fn from_initialized_ptr(ptr: *mut QueueHeader) -> Result<&'static Self, QueueError> {
         unsafe {
             let len = (*ptr).mask + 1;
@@ -128,10 +131,7 @@ impl<T: Copy> Queue<T> {
                 return Err(QueueError::UnInitialized);
             }
 
-            Ok(
-                &*(std::ptr::slice_from_raw_parts_mut(ptr, len)
-                    as *const Queue<T>),
-            )
+            Ok(&*(std::ptr::slice_from_raw_parts_mut(ptr, len) as *const Queue<T>))
         }
     }
 
@@ -143,15 +143,15 @@ impl<T: Copy> Queue<T> {
     fn next_count(&self) -> usize {
         match self.header.queue_type {
             QueueType::Unknown => panic!("Unknown queue"),
-            QueueType::MPMC =>self.header.count.fetch_add(1, Ordering::AcqRel) ,
-            QueueType::SPMC =>
-                {
-                    let c = self.header.count.load(Ordering::Relaxed);
-                    self.header.count.store(c.wrapping_add(1), Ordering::Relaxed);
-                    c
+            QueueType::MPMC => self.header.count.fetch_add(1, Ordering::AcqRel),
+            QueueType::SPMC => {
+                let c = self.header.count.load(Ordering::Relaxed);
+                self.header
+                    .count
+                    .store(c.wrapping_add(1), Ordering::Relaxed);
+                c
             }
         }
-        
     }
 
     fn load(&self, pos: usize) -> &VersionedLock<T> {
@@ -170,7 +170,7 @@ impl<T: Copy> Queue<T> {
         self.load(pos).version()
     }
 
-    // returns the current count 
+    // returns the current count
     fn produce(&self, item: &T) -> usize {
         let p = self.next_count();
         let lock = self.load(p & self.header.mask);
@@ -178,7 +178,7 @@ impl<T: Copy> Queue<T> {
         p
     }
 
-    fn produce_arg(&self, item: &PublishArg) -> usize{
+    fn produce_arg(&self, item: &PublishArg) -> usize {
         let p = self.next_count();
         let lock = self.load(p & self.header.mask);
         lock.write_arg(item);
@@ -189,6 +189,9 @@ impl<T: Copy> Queue<T> {
         self.load(ri).read(el, ri_ver)
     }
 
+    pub fn read(&self, el: &mut T, ri: usize) -> usize {
+        self.load(ri).read_no_ver(el)
+    }
 
     fn len(&self) -> usize {
         self.header.mask + 1
@@ -213,7 +216,7 @@ impl<T: Copy> Queue<T> {
         }
     }
 
-    fn produce_first(&self, item: &T) -> usize{
+    fn produce_first(&self, item: &T) -> usize {
         // we check whether the version in the previous lock is different
         // to the one we are going to write to, otherwise there's something wrong
         // most likely the count we read from the shmem is not actually
@@ -265,24 +268,35 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Queue<T> {
     }
 }
 
-#[cfg(feature="shmem")]
+#[cfg(feature = "shmem")]
 impl<T: Copy> Queue<T> {
-    pub fn shared<P: AsRef<std::path::Path>>(shmem_flink: P, size: usize, typ: QueueType) -> Result<&'static Self, QueueError> {
+    pub fn shared<P: AsRef<std::path::Path>>(
+        shmem_flink: P,
+        size: usize,
+        typ: QueueType,
+    ) -> Result<&'static Self, QueueError> {
         use shared_memory::{ShmemConf, ShmemError};
-        match ShmemConf::new().size(Self::size_of(size)).flink(&shmem_flink).create() {
+        match ShmemConf::new()
+            .size(Self::size_of(size))
+            .flink(&shmem_flink)
+            .create()
+        {
             Ok(shmem) => {
                 let ptr = shmem.as_ptr();
                 std::mem::forget(shmem);
                 Self::from_uninitialized_ptr(ptr, size, typ)
-            },
+            }
             Err(ShmemError::LinkExists) => {
                 let shmem = ShmemConf::new().flink(shmem_flink).open().unwrap();
                 let ptr = shmem.as_ptr() as *mut QueueHeader;
                 std::mem::forget(shmem);
                 Self::from_initialized_ptr(ptr)
-            },
+            }
             Err(e) => {
-                eprintln!("Unable to create or open shmem flink {:?} : {e}", shmem_flink.as_ref());
+                eprintln!(
+                    "Unable to create or open shmem flink {:?} : {e}",
+                    shmem_flink.as_ref()
+                );
                 Err(e.into())
             }
         }
@@ -349,7 +363,7 @@ impl<'a, T: Copy> Consumer<'a, T> {
         while self.queue.version_of(self.pos) > self.expected_version {
             self.update_pos()
         }
-        // self.expected_version += 2;
+        self.expected_version += 2;
     }
 
     fn update_pos(&mut self) {
@@ -519,13 +533,15 @@ mod queue {
         multithread(8, 8, 100000);
     }
     #[test]
-    #[cfg(feature="shmem")]
+    #[cfg(feature = "shmem")]
     fn basic_shared() {
         for typ in [QueueType::SPMC, QueueType::MPMC] {
             let path = std::path::Path::new("/dev/shm/blabla_test");
             let q = Queue::shared(&path, 16, typ).unwrap();
             let mut p = Producer::from(&*q);
             let mut c = Consumer::from(&*q);
+
+            assert_eq!(q.next_pos(), c.pos);
             p.produce(&1);
             let mut m = 0;
 
