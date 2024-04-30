@@ -322,20 +322,20 @@ impl<'a, T: Copy> From<&'a Queue<T>> for Producer<'a, T> {
 
 impl<'a, T: Copy> Producer<'a, T> {
     pub fn produce(&mut self, msg: &T) -> usize {
-        if self.produced_first == 0 {
-            self.produced_first = 1;
-            self.queue.produce_first(msg)
-        } else {
+        // if self.produced_first == 0 {
+        //     self.produced_first = 1;
+        //     self.queue.produce_first(msg)
+        // } else {
             self.queue.produce(msg)
-        }
+        // }
     }
     pub fn produce_arg(&mut self, msg: &PublishArg) -> usize {
-        if self.produced_first == 0 {
-            self.produced_first = 1;
-            self.queue.produce_first_arg(msg)
-        } else {
+        // if self.produced_first == 0 {
+        //     self.produced_first = 1;
+        //     self.queue.produce_first_arg(msg)
+        // } else {
             self.queue.produce_arg(msg)
-        }
+        // }
     }
 }
 
