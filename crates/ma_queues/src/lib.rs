@@ -541,7 +541,7 @@ mod queue {
             let mut p = Producer::from(&*q);
             let mut c = Consumer::from(&*q);
 
-            assert_eq!(q.next_pos(), c.pos);
+            assert_eq!(q.next_count() & q.header.mask, c.pos);
             p.produce(&1);
             let mut m = 0;
 
