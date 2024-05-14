@@ -1,5 +1,5 @@
 use std::alloc::Layout;
-use crate::versioned_lock::*;
+use crate::seqlock::*;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -12,13 +12,13 @@ pub struct VectorHeader {
 #[repr(C, align(64))]
 pub struct SeqlockVector<T> {
     header: VectorHeader,
-    buffer: [VersionedLock<T>],
+    buffer: [SeqLock<T>],
 }
 impl<T: Copy> SeqlockVector<T> {
     pub fn new(len: usize) -> &'static Self {
         // because we don't need len to be power of 2
         let size = std::mem::size_of::<VectorHeader>()
-            + len * std::mem::size_of::<VersionedLock<T>>();
+            + len * std::mem::size_of::<SeqLock<T>>();
 
         unsafe {
             let ptr = std::alloc::alloc_zeroed(
@@ -34,7 +34,7 @@ impl<T: Copy> SeqlockVector<T> {
 
     pub const fn size_of(len: usize) -> usize {
         std::mem::size_of::<VectorHeader>()
-            + len * std::mem::size_of::<VersionedLock<T>>()
+            + len * std::mem::size_of::<SeqLock<T>>()
     }
 
     fn from_uninitialized_ptr(
@@ -45,7 +45,7 @@ impl<T: Copy> SeqlockVector<T> {
             // why len? because the size in the fat pointer ONLY cares about the unsized part of the struct
             // i.e. the length of the buffer
             let q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, len) as *mut SeqlockVector<T>);
-            let elsize = std::mem::size_of::<VersionedLock<T>>();
+            let elsize = std::mem::size_of::<SeqLock<T>>();
             q.header.bufsize = len;
             q.header.elsize = elsize;
             q
@@ -61,7 +61,7 @@ impl<T: Copy> SeqlockVector<T> {
     }
 
     //TODO: ErrorHandling
-    fn load(&self, pos: usize) -> &VersionedLock<T> {
+    fn load(&self, pos: usize) -> &SeqLock<T> {
         unsafe { self.buffer.get_unchecked(pos) }
     }
 

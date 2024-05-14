@@ -5,7 +5,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Bencher
 fn write_bench<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize) {
     std::thread::scope(|s| {
         let lock =
-            Arc::new(ma_queues::versioned_lock::VersionedLock::new([0u8; N_BYTES]));
+            Arc::new(ma_queues::seqlock::SeqLock::new([0u8; N_BYTES]));
         for i in 0..n_contenders {
             let lock2 = lock.clone();
             s.spawn(move || {
@@ -89,7 +89,7 @@ fn write(c: &mut Criterion) {
 fn read_into_bench<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize) {
     std::thread::scope(|s| {
         let lock =
-            Arc::new(ma_queues::versioned_lock::VersionedLock::new([0u8; N_BYTES]));
+            Arc::new(ma_queues::seqlock::SeqLock::new([0u8; N_BYTES]));
         let done = Arc::new(sync::atomic::AtomicBool::new(false));
         let done1 = done.clone();
         let lock1 = lock.clone();
@@ -203,7 +203,7 @@ fn latency_bench<const N_BYTES:usize>(b: &mut Bencher, n_contenders: usize) {
         clock.now();
 
         let lock =
-            Arc::new(ma_queues::versioned_lock::VersionedLock::new(TimingMessage{rdtsc:clock.raw(), data:[0u8; N_BYTES]}));
+            Arc::new(ma_queues::seqlock::SeqLock::new(TimingMessage{rdtsc:clock.raw(), data:[0u8; N_BYTES]}));
         let done = Arc::new(sync::atomic::AtomicBool::new(false));
         let done1 = done.clone();
         let lock1 = lock.clone();

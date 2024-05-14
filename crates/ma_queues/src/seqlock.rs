@@ -7,19 +7,19 @@ use super::ReadError;
 //TODO: Make the types more rust like. I.e. on copy types -> copy on write/read, clone types -> copy std::mem::forget till read etc
 /// A sequential lock
 #[repr(C, align(64))]
-pub struct VersionedLock<T> {
+pub struct SeqLock<T> {
     version: UnsafeCell<usize>,
     data: UnsafeCell<T>,
 }
-unsafe impl<T: Send> Send for VersionedLock<T> {}
-unsafe impl<T: Send> Sync for VersionedLock<T> {}
+unsafe impl<T: Send> Send for SeqLock<T> {}
+unsafe impl<T: Send> Sync for SeqLock<T> {}
 
 // TODO: Try 32 bit version
-impl<T: Copy> VersionedLock<T> {
+impl<T: Copy> SeqLock<T> {
     /// Creates a new SeqLock with the given initial value.
     #[inline]
-    pub const fn new(val: T) -> VersionedLock<T> {
-        VersionedLock {
+    pub const fn new(val: T) -> SeqLock<T> {
+        SeqLock {
             version: UnsafeCell::new(0),
             data: UnsafeCell::new(val),
         }
@@ -170,14 +170,14 @@ impl<T: Copy> VersionedLock<T> {
     }
 }
 
-impl<T: Copy + Default> Default for VersionedLock<T> {
+impl<T: Copy + Default> Default for SeqLock<T> {
     #[inline]
-    fn default() -> VersionedLock<T> {
-        VersionedLock::new(Default::default())
+    fn default() -> SeqLock<T> {
+        SeqLock::new(Default::default())
     }
 }
 
-impl<T: Copy + fmt::Debug> fmt::Debug for VersionedLock<T> {
+impl<T: Copy + fmt::Debug> fmt::Debug for SeqLock<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SeqLock {{ data: {:?} }}", unsafe { *self.data.get() })
     }
@@ -190,13 +190,13 @@ mod tests {
 
     #[test]
     fn lock_size() {
-        assert_eq!(std::mem::size_of::<VersionedLock<[u8; 48]>>(), 64);
-        assert_eq!(std::mem::size_of::<VersionedLock<[u8; 61]>>(), 128)
+        assert_eq!(std::mem::size_of::<SeqLock<[u8; 48]>>(), 64);
+        assert_eq!(std::mem::size_of::<SeqLock<[u8; 61]>>(), 128)
     }
     #[test]
     fn read_no_ver() {
         use crate::messages::Message60;
-        let lock = VersionedLock::default();
+        let lock = SeqLock::default();
         std::thread::scope(|s| {
             s.spawn(|| {
                 core_affinity::set_for_current(core_affinity::CoreId { id:  3 });
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn read() {
         use crate::messages::Message1020;
-        let lock: VersionedLock<Message1020> = VersionedLock::default();
+        let lock: SeqLock<Message1020> = SeqLock::default();
         let mut m = Default::default();
         assert!(matches!(lock.read(&mut m, 2), Err(ReadError::Empty)));
 
@@ -299,7 +299,7 @@ mod tests {
     }
     #[test]
     fn write_unpoison() {
-        let lock = VersionedLock::default();
+        let lock = SeqLock::default();
         lock._set_version(1);
         lock.write_unpoison(&1);
         assert_eq!(lock.version(), 2);

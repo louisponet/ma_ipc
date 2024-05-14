@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 use thiserror::Error;
-use versioned_lock::VersionedLock;
+use seqlock::SeqLock;
 
 #[derive(Error, Debug, Copy, Clone, PartialEq)]
 pub enum ReadError {
@@ -31,7 +31,7 @@ pub enum QueueError {
 pub mod ffi;
 pub mod messages;
 pub mod vector;
-pub mod versioned_lock;
+pub mod seqlock;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -65,7 +65,7 @@ fn power_of_two(mut v: usize) -> usize {
 #[repr(C, align(64))]
 pub struct Queue<T> {
     pub header: QueueHeader,
-    buffer: [versioned_lock::VersionedLock<T>],
+    buffer: [seqlock::SeqLock<T>],
 }
 
 impl<T: Copy> Queue<T> {
@@ -73,7 +73,7 @@ impl<T: Copy> Queue<T> {
     pub fn new(len: usize, queue_type: QueueType) -> Result<&'static Self, QueueError> {
         let real_len = len.next_power_of_two();
         let size =
-            std::mem::size_of::<QueueHeader>() + real_len * std::mem::size_of::<VersionedLock<T>>();
+            std::mem::size_of::<QueueHeader>() + real_len * std::mem::size_of::<SeqLock<T>>();
 
         unsafe {
             let ptr = std::alloc::alloc_zeroed(
@@ -91,7 +91,7 @@ impl<T: Copy> Queue<T> {
 
     pub const fn size_of(len: usize) -> usize {
         std::mem::size_of::<QueueHeader>()
-            + len.next_power_of_two() * std::mem::size_of::<VersionedLock<T>>()
+            + len.next_power_of_two() * std::mem::size_of::<SeqLock<T>>()
     }
 
     fn from_uninitialized_ptr(
@@ -104,7 +104,7 @@ impl<T: Copy> Queue<T> {
         }
         unsafe {
             let q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, len) as *mut Queue<T>);
-            let elsize = std::mem::size_of::<VersionedLock<T>>();
+            let elsize = std::mem::size_of::<SeqLock<T>>();
             if !len.is_power_of_two() {
                 return Err(QueueError::LengthNotPowerOfTwo);
             }
@@ -154,7 +154,7 @@ impl<T: Copy> Queue<T> {
         }
     }
 
-    fn load(&self, pos: usize) -> &VersionedLock<T> {
+    fn load(&self, pos: usize) -> &SeqLock<T> {
         unsafe { self.buffer.get_unchecked(pos) }
     }
 
