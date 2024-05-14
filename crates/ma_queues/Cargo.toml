@@ -24,7 +24,7 @@ shmem = ["dep:shared_memory"]
 default = ["shmem"]
 
 [[bench]]
-name = "versioned_lock"
+name = "seqlock"
 harness = false
 [[bench]]
 name = "queues"
