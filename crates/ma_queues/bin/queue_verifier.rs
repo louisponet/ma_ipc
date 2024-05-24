@@ -59,7 +59,6 @@ impl GenericQueue {
 
         for i in 1..self.header.n_elements() {
             let v = self.version(i);
-            println!("{v}");
             if v & 1 == 1 {
                 panic!("odd version at {i}: {prev_v} -> {v}");
             }
