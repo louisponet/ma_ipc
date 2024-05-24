@@ -1,15 +1,15 @@
 use crate::messages::PublishArg;
 use std::cell::UnsafeCell;
-use std::sync::atomic::{fence, Ordering};
 use std::fmt;
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 use super::ReadError;
 //TODO: Make the types more rust like. I.e. on copy types -> copy on write/read, clone types -> copy std::mem::forget till read etc
 /// A sequential lock
 #[repr(C, align(64))]
 pub struct SeqLock<T> {
-    version: UnsafeCell<usize>,
-    data: UnsafeCell<T>,
+    version: AtomicUsize,
+    data:    UnsafeCell<T>,
 }
 unsafe impl<T: Send> Send for SeqLock<T> {}
 unsafe impl<T: Send> Sync for SeqLock<T> {}
@@ -20,21 +20,22 @@ impl<T: Copy> SeqLock<T> {
     #[inline]
     pub const fn new(val: T) -> SeqLock<T> {
         SeqLock {
-            version: UnsafeCell::new(0),
-            data: UnsafeCell::new(val),
+            version: AtomicUsize::new(0),
+            data:    UnsafeCell::new(val),
         }
     }
 
     fn _set_version(&self, version: usize) {
-        unsafe { *self.version.get() = version }
+        self.version.store(version, Ordering::Relaxed)
     }
+
     pub fn set_version(&self, version: usize) {
         assert!(version & 1 == 0);
         self._set_version(version)
     }
 
     pub fn version(&self) -> usize {
-        unsafe { *self.version.get() }
+        self.version.load(Ordering::Relaxed)
     }
 
     // Error returned if reader was sped past
@@ -42,89 +43,73 @@ impl<T: Copy> SeqLock<T> {
     // if version is too high -> writer has written twice -> sped past -> error
     // if version changed -> got sped past because if v1 != expected_version it wouldn't even have started
     // reading
-    #[inline]
+    #[inline(never)]
     pub fn read(&self, result: &mut T, expected_version: usize) -> Result<(), ReadError> {
-        // Load the first sequence number. The acquire ordering ensures that
-        // this is done before reading the data.
-        let v1 = unsafe { *self.version.get() };
-
-        fence(Ordering::Acquire);
-        // If the sequence number is odd then it means a writer is currently
-        // modifying the value.
-        if v1 < expected_version {
-            return Err(ReadError::Empty);
-        }
-
-        // Here v1 has to be larger or equal than expected. If larger -> sped past -> error
-        if v1 > expected_version {
-            return Err(ReadError::SpedPast);
-        }
-        // Version is fine, supposedly not being written + not written twice
-
-        // We need to use a volatile read here because the data may be
-        // concurrently modified by a writer. We also use MaybeUninit in
-        // case we read the data in the middle of a modification.
-        unsafe {
-                (result as *mut T).copy_from(self.data.get(), 1);
-        }
-        fence(Ordering::AcqRel);
-        // Make sure the seq2 read occurs after reading the data. What we
-        // ideally want is a load(Release), but the Release ordering is not
-        // available on loads.
-
-        // If the sequence number is the same then the data wasn't modified
-        // while we were reading it, and can be returned.
-        let v2 = unsafe { *self.version.get() };
-        fence(Ordering::Acquire);
-        if v1 == v2 {
-            return Ok(());
-        } else {
-            return Err(ReadError::SpedPast);
-        }
-    }
-
-    #[inline]
-    pub fn read_no_ver(&self, result: &mut T) -> usize {
         loop {
-            let v1 = unsafe { *self.version.get() };
+            // Load the first sequence number. The acquire ordering ensures that
+            // this is done before reading the data.
+            let v1 = self.version.load(Ordering::Relaxed);
 
-            fence(Ordering::Acquire);
-            if v1 & 1 == 1 {
-                continue;
-            }
+            // If the sequence number is odd then it means a writer is currently
+            // modifying the value.
+            // Version is fine, supposedly not being written + not written twice
+
+            // We need to use a volatile read here because the data may be
+            // concurrently modified by a writer. We also use MaybeUninit in
+            // case we read the data in the middle of a modification.
             unsafe {
-                (result as *mut  T).copy_from(self.data.get(), 1);
+                (result as *mut T).copy_from(self.data.get(), 1);
             }
-            let v2 = unsafe { *self.version.get() };
+            // Make sure the seq2 read occurs after reading the data. What we
+            // ideally want is a load(Release), but the Release ordering is not
+            // available on loads.
+
+            // If the sequence number is the same then the data wasn't modified
+            // while we were reading it, and can be returned.
+            let v2 = self.version.load(Ordering::Relaxed);
             fence(Ordering::Acquire);
             if v1 == v2 {
-                return v1;
+                if v1 == expected_version {
+                    return Ok(());
+                } else if v1 < expected_version {
+                    return Err(ReadError::Empty);
+                } else {
+                    return Err(ReadError::SpedPast);
+                }
             }
         }
     }
 
-    #[inline]
-    fn _write<F>(&self, f: F)
-    where
-        F: FnOnce() -> (),
-    {
-        unsafe {
-            // Increment the sequence number. At this point, the number will be odd,
-            // which will force readers to spin until we finish writing.
-            let v = *self.version.get();
-            *self.version.get() = v.wrapping_add(1) ;
-            fence(Ordering::Release);
-            fence(Ordering::AcqRel);
-            // Make sure any writes to the data happen after incrementing the
-            // sequence number. What we ideally want is a store(Acquire), but the
-            // Acquire ordering is not available on stores.
-            f();
-            fence(Ordering::AcqRel);
-            *self.version.get() = v.wrapping_add(2);
-            fence(Ordering::Release);
+    #[inline(never)]
+    pub fn read_no_ver(&self, result: &mut T) {
+        loop {
+            let v1 = self.version.load(Ordering::Relaxed);
+            unsafe {
+                (result as *mut T).copy_from(self.data.get(), 1);
+            }
+            let v2 = self.version.load(Ordering::Relaxed);
+            if v1 == v2 && v1 & 1 == 0 {
+                return;
+            }
         }
     }
-    #[inline]
+
+    #[inline(never)]
+    fn _write<F>(&self, f: F)
+    where
+        F: FnOnce(),
+    {
+        // Increment the sequence number. At this point, the number will be odd,
+        // which will force readers to spin until we finish writing.
+        let v = self.version.load(Ordering::Relaxed);
+        self.version.store(v.wrapping_add(1),Ordering::Relaxed);
+        // Make sure any writes to the data happen after incrementing the
+        // sequence number. What we ideally want is a store(Acquire), but the
+        // Acquire ordering is not available on stores.
+        f();
+        self.version.store(v.wrapping_add(2),Ordering::Relaxed);
+    }
+    #[inline(never)]
     pub fn write(&self, val: &T) {
         self._write(|| {
             unsafe { self.data.get().copy_from(val as *const T, 1) };
@@ -138,29 +123,27 @@ impl<T: Copy> SeqLock<T> {
         });
     }
 
-    #[inline]
+    #[inline(never)]
     fn _write_unpoison<F>(&self, f: F)
     where
-        F: FnOnce() -> (),
+        F: FnOnce(),
     {
-        unsafe {
-            let v = *self.version.get();
-            let v1 = v.wrapping_add(v.wrapping_sub(1) & 1);
-            *self.version.get() = v1;
-            fence(Ordering::Release);
-            f();
-            *self.version.get() = v1.wrapping_add(1);
-            fence(Ordering::Release);
-        }
+        let v = self.version.load(Ordering::Relaxed).wrapping_sub(1) & 1;
+        self.version.store(v, Ordering::Relaxed);
+        // Make sure any writes to the data happen after incrementing the
+        // sequence number. What we ideally want is a store(Acquire), but the
+        // Acquire ordering is not available on stores.
+        f();
+        self.version.store(v.wrapping_add(1), Ordering::Relaxed);
     }
-    #[inline]
+    #[inline(never)]
     pub fn write_unpoison(&self, val: &T) {
         self._write_unpoison(|| {
             let t = self.data.get() as *mut u8;
             unsafe { t.copy_from(val as *const _ as *const u8, std::mem::size_of::<T>()) };
         });
     }
-    #[inline]
+    #[inline(never)]
     pub fn write_unpoison_arg(&self, val: &PublishArg) {
         self._write_unpoison(|| unsafe {
             self.data
@@ -187,6 +170,7 @@ impl<T: Copy + fmt::Debug> fmt::Debug for SeqLock<T> {
 mod tests {
 
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn lock_size() {
@@ -197,23 +181,25 @@ mod tests {
     fn read_no_ver() {
         use crate::messages::Message60;
         let lock = SeqLock::default();
+        let mut done = AtomicBool::new(false);
         std::thread::scope(|s| {
-            s.spawn(|| {
-                core_affinity::set_for_current(core_affinity::CoreId { id:  3 });
+            let reader = s.spawn(|| {
+                core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
                 let mut m = Message60::default();
                 let mut count = 0u8;
                 let mut curver = 0;
                 let mut prevdat = 255;
-                loop {
+                let mut tot_read = 0;
+                while !done.load(Ordering::Relaxed) {
                     let newver = lock.read_no_ver(&mut m);
-                    if newver > curver + 1  {
+                    if newver > curver + 1 {
+                        tot_read += 1;
                         if m.data[0] == 1 && m.data[1] == 2 {
-                            return;
+                            return tot_read;
                         }
                         for i in m.data {
                             assert_eq!(count, i);
                             assert_ne!(prevdat, i);
-
                         }
                         prevdat = m.data[0];
 
@@ -221,16 +207,17 @@ mod tests {
                         curver = newver;
                     }
                 }
+                tot_read
             });
             std::thread::sleep(std::time::Duration::from_millis(100));
-            s.spawn(|| {
-                core_affinity::set_for_current(core_affinity::CoreId { id:  1 });
+            let writer = s.spawn(|| {
+                core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
                 let curt = std::time::Instant::now();
+                let mut tot_written = 0;
                 let mut count = 0u8;
                 while curt.elapsed() < std::time::Duration::from_secs(10) {
-                    lock.write(&Message60 {
-                        data: [count; 60],
-                    });
+                    lock.write(&Message60 { data: [count; 60] });
+                    tot_written += 1;
                     count = count.wrapping_add(1);
                     std::thread::sleep(std::time::Duration::from_micros(20));
                 }
@@ -238,7 +225,11 @@ mod tests {
                 data[0] = 1;
                 data[1] = 2;
                 lock.write(&Message60 { data: data });
+                tot_written += 1;
+                done.store(true, Ordering::Relaxed);
+                tot_written
             });
+            assert_eq!(writer.join().unwrap(), reader.join().unwrap());
         });
     }
 
@@ -247,6 +238,9 @@ mod tests {
         use crate::messages::Message1020;
         let lock: SeqLock<Message1020> = SeqLock::default();
         let mut m = Default::default();
+
+        let mut done = AtomicBool::new(false);
+
         assert!(matches!(lock.read(&mut m, 2), Err(ReadError::Empty)));
 
         std::thread::scope(|s| {
@@ -255,7 +249,7 @@ mod tests {
                 let mut ver = 2;
                 let mut m = Message1020::default();
                 let mut tot_read = 0;
-                loop {
+                while !done.load(Ordering::Relaxed) {
                     match lock.read(&mut m, ver) {
                         Ok(()) => {
                             if m.data[0] == 1 && m.data[1] == 2 {
@@ -292,6 +286,7 @@ mod tests {
                 data[0] = 1;
                 data[1] = 2;
                 lock.write(&Message1020 { data: data });
+                done.store(true, Ordering::Relaxed);
                 tot
             });
             assert_eq!(producer.join().unwrap(), consumer.join().unwrap())

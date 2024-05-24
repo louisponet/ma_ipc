@@ -189,7 +189,7 @@ impl<T: Copy> Queue<T> {
         self.load(ri).read(el, ri_ver)
     }
 
-    pub fn read(&self, el: &mut T, ri: usize) -> usize {
+    pub fn read(&self, el: &mut T, ri: usize) {
         self.load(ri).read_no_ver(el)
     }
 
@@ -199,12 +199,15 @@ impl<T: Copy> Queue<T> {
 
     // This exists just to check the state of the queue for debugging purposes
     #[allow(dead_code)]
-    fn verify(&self) {
+    pub fn verify(&self) {
         let mut prev_v = self.load(0).version();
         let mut n_changes = 0;
         for i in 1..=self.header.mask {
             let lck = self.load(i);
             let v = lck.version();
+            if v & 1 == 1 {
+                panic!("odd version at {i}: {prev_v} -> {v}");
+            }
             if v != prev_v && v & 1 == 0 {
                 n_changes += 1;
                 log::debug!("version change at {i}: {prev_v} -> {v}");
@@ -363,6 +366,10 @@ impl<'a, T: Copy> Consumer<'a, T> {
         while self.queue.version_of(self.pos) > self.expected_version {
             self.update_pos()
         }
+        self.expected_version += 2;
+    }
+
+    pub fn recover_after_error_dumb(&mut self) {
         self.expected_version += 2;
     }
 

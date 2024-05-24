@@ -10,7 +10,7 @@ edition = "2021"
 include = ["**/*.rs", "Cargo.toml"]
 license = "BSD"
 repository = "https://github.com/louisponet/ma_ipc"
-rust-version = "1.74"
+rust-version = "1.77"
 version = "0.1.0"
 
 [workspace.dependencies]
