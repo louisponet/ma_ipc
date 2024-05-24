@@ -26,6 +26,11 @@ default = ["shmem"]
 [[bench]]
 name = "seqlock"
 harness = false
+
 [[bench]]
 name = "queues"
 harness = false
+
+[[bin]]
+name = "queue_verifier"
+path = "bin/queue_verifier.rs"

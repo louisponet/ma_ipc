@@ -1,10 +1,8 @@
 use crate::messages::PublishArg;
-use std::{
-    alloc::Layout,
-    sync::atomic::{AtomicUsize, Ordering},
-};
-use thiserror::Error;
 use seqlock::SeqLock;
+use std::alloc::Layout;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use thiserror::Error;
 
 #[derive(Error, Debug, Copy, Clone, PartialEq)]
 pub enum ReadError {
@@ -30,8 +28,8 @@ pub enum QueueError {
 #[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod messages;
-pub mod vector;
 pub mod seqlock;
+pub mod vector;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -44,13 +42,27 @@ pub enum QueueType {
 #[derive(Debug)]
 #[repr(C, align(64))]
 pub struct QueueHeader {
-    pub queue_type: QueueType,  // 1
-    elsize_shift_left_bits: u8, // 2
-    is_initialized: u8,         // 3
-    _pad1: u8,                  // 4
-    elsize: u32,                // 8
-    mask: usize,                // 16
-    count: AtomicUsize,         // 24
+    pub queue_type:         QueueType,   // 1
+    elsize_shift_left_bits: u8,          // 2
+    pub is_initialized:     u8,          // 3
+    _pad1:                  u8,          // 4
+    pub elsize:                 u32,         // 8
+    mask:                   usize,       // 16
+    count:                  AtomicUsize, // 24
+}
+impl QueueHeader {
+    /// in bytes
+    pub fn sizeof(&self) -> usize {
+        (self.mask + 1) * (self.elsize as usize)
+    }
+
+    pub fn n_elements(&self) -> usize {
+        self.mask + 1
+    }
+
+    pub fn from_ptr(ptr: *mut u8) -> &'static mut Self {
+        unsafe { &mut *(ptr as *mut Self) }
+    }
 }
 
 fn power_of_two(mut v: usize) -> usize {
@@ -65,7 +77,7 @@ fn power_of_two(mut v: usize) -> usize {
 #[repr(C, align(64))]
 pub struct Queue<T> {
     pub header: QueueHeader,
-    buffer: [seqlock::SeqLock<T>],
+    buffer:     [seqlock::SeqLock<T>],
 }
 
 impl<T: Copy> Queue<T> {
@@ -311,14 +323,14 @@ impl<T: Copy> Queue<T> {
 pub struct Producer<'a, T> {
     // can't we just make this a usize since we're anyway padding?
     produced_first: u8, // 1
-    pub queue: &'a Queue<T>,
+    pub queue:      &'a Queue<T>,
 }
 
 impl<'a, T: Copy> From<&'a Queue<T>> for Producer<'a, T> {
     fn from(queue: &'a Queue<T>) -> Self {
         Self {
             produced_first: 0,
-            queue: queue,
+            queue:          queue,
         }
     }
 }
@@ -329,7 +341,7 @@ impl<'a, T: Copy> Producer<'a, T> {
         //     self.produced_first = 1;
         //     self.queue.produce_first(msg)
         // } else {
-            self.queue.produce(msg)
+        self.queue.produce(msg)
         // }
     }
     pub fn produce_arg(&mut self, msg: &PublishArg) -> usize {
@@ -337,7 +349,7 @@ impl<'a, T: Copy> Producer<'a, T> {
         //     self.produced_first = 1;
         //     self.queue.produce_first_arg(msg)
         // } else {
-            self.queue.produce_arg(msg)
+        self.queue.produce_arg(msg)
         // }
     }
 }
@@ -353,12 +365,12 @@ impl<'a, T> AsMut<Producer<'a, T>> for Producer<'a, T> {
 pub struct Consumer<'a, T> {
     /// Shared reference to the channel
     /// Read index pointer
-    pos: usize, // 8
-    mask: usize,             // 16
-    expected_version: usize, // 24
-    is_running: u8,          // 25
-    _pad: [u8; 7],           // 32
-    queue: &'a Queue<T>,     // 48 fat ptr: (usize, pointer)
+    pos:              usize, // 8
+    mask:             usize,        // 16
+    expected_version: usize,        // 24
+    is_running:       u8,           // 25
+    _pad:             [u8; 7],      // 32
+    queue:            &'a Queue<T>, // 48 fat ptr: (usize, pointer)
 }
 
 impl<'a, T: Copy> Consumer<'a, T> {
