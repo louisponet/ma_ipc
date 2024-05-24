@@ -46,7 +46,7 @@ pub struct QueueHeader {
     elsize_shift_left_bits: u8,          // 2
     pub is_initialized:     u8,          // 3
     _pad1:                  u8,          // 4
-    pub elsize:                 u32,         // 8
+    pub elsize:             u32,         // 8
     mask:                   usize,       // 16
     count:                  AtomicUsize, // 24
 }

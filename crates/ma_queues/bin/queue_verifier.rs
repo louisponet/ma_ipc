@@ -19,6 +19,7 @@ impl GenericQueue {
                 return Err(QueueError::UnInitialized);
             }
 
+            println!("sizeof {}, elsize {}", (*ptr).sizeof(),(*ptr).elsize);
             Ok(&*(std::ptr::slice_from_raw_parts_mut(ptr, (*ptr).sizeof()) as *const Self))
         }
     }
