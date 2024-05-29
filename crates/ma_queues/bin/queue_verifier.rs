@@ -1,10 +1,9 @@
-use ma_queues::{QueueHeader, QueueError};
+use ma_queues::{seqlock::SeqLock, Consumer, Queue, QueueError, QueueHeader};
 use std::env;
 struct GenericQueue {
     header: QueueHeader,
     buffer: [u8],
 }
-
 
 impl GenericQueue {
     #[allow(dead_code)]
@@ -77,21 +76,53 @@ impl GenericQueue {
 }
 
 
+#[derive(Debug, Copy, Clone, PartialEq,  Default)]
+pub struct Timestamp {
+    pub ingestion_t: u64, //16
+    pub exchange_t:  u64, //24
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct L2Update {
+    pub timestamp:      Timestamp,
+    pub instrument_ids: u64,
+    pub flags:          u8,
+    pub price:          f64,
+    pub volume:         f64,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum QueueMessage<T> {
+    Data((u64, u64), T),
+    TimeUpdate(u32, Timestamp),
+    #[default]
+    Stop,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("please supply the path as argument");
-        return;
+    let q = Queue::<QueueMessage<L2Update>>::open_shared("/dev/shm/mantra/queues/L2Update").unwrap();
+    let mut c = Consumer::from(q);
+    for i in 0..131072 {
+        eprintln!("{:?}", q.version_of(i));
     }
 
-    let p = std::path::Path::new(&args[1]);
+    // let mut m = Default::default();
+    // eprintln!("{:?}", c.try_consume(&mut m));
+    // let args: Vec<String> = env::args().collect();
+    // if args.len() != 2 {
+    //     eprintln!("please supply the path as argument");
+    //     return;
+    // }
 
-    if !p.exists() {
-        eprintln!("{p:?} does not exist");
-        return;
-    }
-    let q = GenericQueue::shared(p).unwrap();
-    q.verify();
+    // let p = std::path::Path::new(&args[1]);
+
+    // if !p.exists() {
+    //     eprintln!("{p:?} does not exist");
+    //     return;
+    // }
+    // let q = GenericQueue::shared(p).unwrap();
+    // q.verify();
 }
 
 

@@ -4,10 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["lib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-ma_ffi = {workspace = true, optional = true}
 shared_memory = {workspace = true, optional = true}
 
 log.workspace = true
@@ -19,7 +18,6 @@ core_affinity.workspace = true
 quanta.workspace = true
 
 [features]
-ffi = ["dep:ma_ffi"]
 shmem = ["dep:shared_memory"]
 default = ["shmem"]
 

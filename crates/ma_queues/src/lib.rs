@@ -48,7 +48,7 @@ pub struct QueueHeader {
     _pad1:                  u8,          // 4
     pub elsize:             u32,         // 8
     mask:                   usize,       // 16
-    count:                  AtomicUsize, // 24
+    pub count:              AtomicUsize, // 24
 }
 impl QueueHeader {
     /// in bytes
@@ -64,6 +64,25 @@ impl QueueHeader {
         unsafe { &mut *(ptr as *mut Self) }
     }
 }
+
+#[cfg(feature = "shmem")]
+impl QueueHeader {
+    pub fn shared<P: AsRef<std::path::Path>>(path: P) -> &'static mut Self {
+        use shared_memory::ShmemConf;
+        match ShmemConf::new()
+            .flink(&path)
+            .open()
+        {
+            Ok(shmem) => {
+                let o = unsafe { &mut *(shmem.as_ptr() as *mut QueueHeader)};
+                std::mem::forget(shmem);
+                o
+            }
+            _ => panic!("couldn't open shmem")
+        }
+    }
+}
+
 
 fn power_of_two(mut v: usize) -> usize {
     let mut n = 0;
@@ -106,7 +125,7 @@ impl<T: Copy> Queue<T> {
             + len.next_power_of_two() * std::mem::size_of::<SeqLock<T>>()
     }
 
-    fn from_uninitialized_ptr(
+    pub fn from_uninitialized_ptr(
         ptr: *mut u8,
         len: usize,
         queue_type: QueueType,
@@ -133,7 +152,7 @@ impl<T: Copy> Queue<T> {
     }
 
     #[allow(dead_code)]
-    fn from_initialized_ptr(ptr: *mut QueueHeader) -> Result<&'static Self, QueueError> {
+    pub fn from_initialized_ptr(ptr: *mut QueueHeader) -> Result<&'static Self, QueueError> {
         unsafe {
             let len = (*ptr).mask + 1;
             if !len.is_power_of_two() {
@@ -178,7 +197,7 @@ impl<T: Copy> Queue<T> {
         ((self.count() / (self.header.mask + 1)) << 1) + 2
     }
 
-    fn version_of(&self, pos: usize) -> usize {
+    pub fn version_of(&self, pos: usize) -> usize {
         self.load(pos).version()
     }
 
@@ -316,13 +335,38 @@ impl<T: Copy> Queue<T> {
             }
         }
     }
+
+    pub fn open_shared<P: AsRef<std::path::Path>>(
+        shmem_flink: P,
+    ) -> Result<&'static Self, QueueError> {
+        use shared_memory::ShmemConf;
+        match ShmemConf::new()
+            .flink(&shmem_flink)
+            .open()
+        {
+            Ok(shmem) => {
+                let ptr = shmem.as_ptr() as *mut QueueHeader;
+                std::mem::forget(shmem);
+                unsafe {
+                    Self::shared(shmem_flink, (*ptr).n_elements(), (*ptr).queue_type)
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Unable to create or open shmem flink {:?} : {e}",
+                    shmem_flink.as_ref()
+                );
+                Err(e.into())
+            }
+        }
+    }
 }
 
 /// Simply exists for the automatic produce_first
 #[repr(C, align(64))]
 pub struct Producer<'a, T> {
     // can't we just make this a usize since we're anyway padding?
-    produced_first: u8, // 1
+    pub produced_first: u8, // 1
     pub queue:      &'a Queue<T>,
 }
 
@@ -330,7 +374,7 @@ impl<'a, T: Copy> From<&'a Queue<T>> for Producer<'a, T> {
     fn from(queue: &'a Queue<T>) -> Self {
         Self {
             produced_first: 0,
-            queue:          queue,
+            queue,
         }
     }
 }

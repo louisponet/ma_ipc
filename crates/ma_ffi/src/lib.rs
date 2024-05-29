@@ -1,150 +1,157 @@
-use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use ma_queues::{messages::*, QueueType};
+use ma_queues::vector::SeqlockVector;
+use ma_queues::{Consumer, Producer, Queue, QueueError, QueueHeader, ReadError};
+use std::ptr;
+use std::sync::atomic::Ordering::{self, SeqCst};
+use thiserror::Error;
 
-#[proc_macro]
-pub fn ffi_msg(input: TokenStream) -> TokenStream {
-    let a: u32 = input.to_string().parse().unwrap();
-
-    let mut func_stream = TokenStream2::default();
-
-    let msgname = format_ident!("Message{}", a);
-
-    let fname = format_ident!("InitProducer{}", a);
-    func_stream.extend(quote! {
-
-    #[no_mangle]
-    #[inline(always)]
-    pub extern "C" fn #fname(
-        queue_ptr: *mut QueueHeader,
-        producer_ptr: *mut Producer<'static, #msgname>,
-    ) -> FFIError {
-        let q = match Queue::from_ptr(queue_ptr) {
-            Ok(q) => q,
-            Err(e) => return e.into(),
-        };
-        unsafe {
-            (*producer_ptr).produced_first = 0;
-            (*producer_ptr).queue = q;
-         }
-        FFIError::Success
-    }});
-
-    let fname = format_ident!("InitConsumer{}", a);
-    func_stream.extend(quote! {
-
-    #[no_mangle]
-    #[inline(always)]
-    pub extern "C" fn #fname(
-        queue_ptr: *mut QueueHeader,
-        consumer_ptr: *mut Consumer<'static,#msgname>,
-    ) -> FFIError {
-        let q = match Queue::from_ptr(queue_ptr) {
-            Ok(q) => q,
-            Err(e) => return e.into(),
-        };
-        Consumer::init_header(consumer_ptr, q);
-        FFIError::Success
-    }});
-
-    let fname = format_ident!("Produce{}", a);
-    func_stream.extend(quote! {
-
-    #[no_mangle]
-    #[inline(always)]
-    pub extern "C" fn #fname(
-        producer: *mut Producer<'static, #msgname>,
-        m: &#msgname,
-    ) -> FFIError {
-        unsafe { &mut (*producer) }.produce(m);
-        FFIError::Success
-    }});
-
-    let fname = format_ident!("ProduceArg{}", a);
-    func_stream.extend(quote! {
-
-    #[no_mangle]
-    #[inline(always)]
-    pub extern "C" fn #fname(
-        producer: *mut Producer<'static, #msgname>,
-        m: &PublishArg,
-    ) -> FFIError {
-        unsafe { &mut (*producer) }.produce_arg(m);
-        FFIError::Success
-    }});
-
-    let fname = format_ident!("Consume{}", a);
-    func_stream.extend(quote! {
-
-    #[no_mangle]
-    #[inline(always)]
-    pub extern "C" fn #fname(
-        reader: *mut Consumer<'static, #msgname>,
-        dest: &mut #msgname,
-    ) -> FFIError {
-        loop {
-            match unsafe { &mut (*reader) }.try_consume(dest) {
-                Ok(()) => return FFIError::Success,
-                Err(e) => return e.into(),
-            }
-        }
-    }});
-
-    // let fname = format_ident!("ConsumeWithCallback{}", a);
-    // func_stream.extend(quote! {
-
-    // #[no_mangle]
-    // #[inline(always)]
-    // pub extern "C" fn #fname(
-    //     consumer_ptr: *mut Consumer<#msgname>,
-    //     cb: extern "C" fn(*const #msgname, u32, FFIError) -> bool,
-    // ) {
-    //     // TODO: Error handling
-    //     loop {
-    //         match unsafe { (*consumer_ptr).try_consume() } {
-    //             Ok(msg) => {
-    //                 if !cb(&msg, #a, FFIError::Success) {
-    //                     break;
-    //                 }
-    //             }
-    //             Err(ReadError::SpedPast) => {
-    //                 cb(& #msgname::default(), #a, FFIError::SpedPast);
-    //                 break;
-    //             }
-    //             Err(ReadError::Empty) => continue,
-    //         }
-    //     }
-    // }});
-    
-    let fname = format_ident!("Write{}", a);
-    func_stream.extend(quote! {
-        #[no_mangle]
-        #[inline(always)]
-        pub extern "C" fn #fname(
-            vector: *mut u8,
-            pos: u32,
-            m: &#msgname,
-        ) -> FFIError {
-             let v = unsafe { &mut (*(std::ptr::slice_from_raw_parts_mut(vector, 128) as *mut SeqlockVector<#msgname>))};
-            v.write(pos as usize,m);
-            FFIError::Success
-        }
-    });
-
-    let fname = format_ident!("Read{}", a);
-    func_stream.extend(quote!{
-         #[no_mangle]
-         #[inline(always)]
-         pub extern "C" fn #fname(
-             vector: *mut u8,
-             pos:u32,
-             dest: &mut #msgname,
-         ) -> FFIError {
-             let v = unsafe { &mut (*(std::ptr::slice_from_raw_parts_mut(vector, 128) as *mut SeqlockVector<#msgname>))};
-             v.read(pos as usize, dest);
-             FFIError::Success
-         }
-     });
-
-    func_stream.into()
+#[derive(Error, Debug)]
+#[repr(u32)]
+pub enum FFIError {
+    #[error("Success")]
+    Success = 0,
+    // Qeueu Creation errors
+    #[error("Unsupported message size")]
+    UnsupportedMessageSize,
+    #[error("Queue length is not power of two")]
+    QueueLengthNotPowerTwo,
+    #[error("Queue was not initialized. Use InitQueue")]
+    QueueUnInitialized,
+    // ReadErrors
+    #[error("ReadError: Queue is empty")]
+    QueueEmpty,
+    #[error("ReadError: Got sped past")]
+    SpedPast,
 }
+
+impl From<ReadError> for FFIError {
+    fn from(value: ReadError) -> Self {
+        match value {
+            ReadError::SpedPast => Self::SpedPast,
+            ReadError::Empty => Self::QueueEmpty,
+        }
+    }
+}
+impl From<()> for FFIError {
+    fn from(value: ()) -> Self {
+        Self::Success
+    }
+}
+
+impl From<QueueError> for FFIError {
+    fn from(value: QueueError) -> Self {
+        match value {
+            QueueError::UnInitialized => Self::QueueUnInitialized,
+            QueueError::LengthNotPowerOfTwo => Self::QueueLengthNotPowerTwo,
+            QueueError::ElementSizeNotPowerTwo => Self::UnsupportedMessageSize,
+            QueueError::SharedMemoryError(_) => todo!(),
+        }
+    }
+}
+
+impl<E: std::error::Error, T> From<Result<&'static Queue<T>, E>> for FFIError
+where
+    FFIError: From<E>,
+{
+    fn from(value: Result<&'static Queue<T>, E>) -> Self {
+        match value {
+            Ok(_) => FFIError::Success,
+            Err(e) => FFIError::from(e),
+        }
+    }
+}
+
+
+//Vector
+#[no_mangle]
+pub extern "C" fn SeqlockVectorSizeInBytes(
+    msgsize_bytes: u32,
+    len: usize,
+    vectorsize_in_bytes: &mut usize,
+) -> FFIError {
+    match msgsize_bytes {
+        56 => *vectorsize_in_bytes = SeqlockVector::<Message56>::size_of(len),
+        120 => *vectorsize_in_bytes = SeqlockVector::<Message120>::size_of(len),
+        248 => *vectorsize_in_bytes = SeqlockVector::<Message248>::size_of(len),
+        504 => *vectorsize_in_bytes = SeqlockVector::<Message504>::size_of(len),
+        1016 => *vectorsize_in_bytes = SeqlockVector::<Message1016>::size_of(len),
+        1656 => *vectorsize_in_bytes = SeqlockVector::<Message1656>::size_of(len),
+        2040 => *vectorsize_in_bytes = SeqlockVector::<Message2040>::size_of(len),
+        4088 => *vectorsize_in_bytes = SeqlockVector::<Message4088>::size_of(len),
+        7224 => *vectorsize_in_bytes = SeqlockVector::<Message7224>::size_of(len),
+        _ => return FFIError::UnsupportedMessageSize,
+    }
+    FFIError::Success
+}
+
+#[no_mangle]
+pub extern "C" fn seqlockvector_size_in_bytes(ptr: *mut u8, msgsize_bytes: u32, len: usize) -> FFIError {
+    match msgsize_bytes {
+        56   => {SeqlockVector::<Message56>::from_uninitialized_ptr(ptr, len);},
+        120  => {SeqlockVector::<Message120>::from_uninitialized_ptr(ptr, len);},
+        248  => {SeqlockVector::<Message248>::from_uninitialized_ptr(ptr, len);},
+        504  => {SeqlockVector::<Message504>::from_uninitialized_ptr(ptr, len);},
+        1016 => {SeqlockVector::<Message1016>::from_uninitialized_ptr(ptr, len);},
+        1656 => {SeqlockVector::<Message1656>::from_uninitialized_ptr(ptr, len);},
+        2040 => {SeqlockVector::<Message2040>::from_uninitialized_ptr(ptr, len);},
+        4088 => {SeqlockVector::<Message4088>::from_uninitialized_ptr(ptr, len);},
+        7224 => {SeqlockVector::<Message7224>::from_uninitialized_ptr(ptr, len);},
+        _ => return FFIError::UnsupportedMessageSize,
+    }
+    FFIError::Success
+}
+
+//Queues
+#[no_mangle]
+#[inline(always)]
+pub extern "C" fn queue_size_in_bytes(
+    msgsize_bytes: u32,
+    len: usize,
+    queuesize_in_bytes: &mut usize,
+) -> FFIError {
+    if !len.is_power_of_two() {
+        return FFIError::QueueLengthNotPowerTwo;
+    }
+
+    match msgsize_bytes {
+        56 => *queuesize_in_bytes = Queue::<Message56>::size_of(len),
+        120 => *queuesize_in_bytes = Queue::<Message120>::size_of(len),
+        248 => *queuesize_in_bytes = Queue::<Message248>::size_of(len),
+        504 => *queuesize_in_bytes = Queue::<Message504>::size_of(len),
+        1016 => *queuesize_in_bytes = Queue::<Message1016>::size_of(len),
+        2040 => *queuesize_in_bytes = Queue::<Message2040>::size_of(len),
+        4088 => *queuesize_in_bytes = Queue::<Message4088>::size_of(len),
+        _ => return FFIError::UnsupportedMessageSize,
+    }
+    FFIError::Success
+}
+
+#[no_mangle]
+#[inline(always)]
+pub extern "C" fn InitQueue(
+    ptr: *mut u8,
+    queue_type: QueueType,
+    msgsize_bytes: u32,
+    len: usize,
+) -> FFIError {
+    match msgsize_bytes {
+        56 => Queue::<Message56>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        120 => Queue::<Message120>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        248 => Queue::<Message248>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        504 => Queue::<Message504>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        1016 => Queue::<Message1016>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        2040 => Queue::<Message2040>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        4088 => Queue::<Message4088>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        _ => return FFIError::UnsupportedMessageSize,
+    }
+}
+use ma_ffi_macro::ffi_msg;
+ffi_msg!(56);
+ffi_msg!(120);
+//ffi_msg!(252);
+//ffi_msg!(508);
+//ffi_msg!(1020);
+//ffi_msg!(2044);
+ffi_msg!(1656);
+ffi_msg!(4088);
+ffi_msg!(7224);

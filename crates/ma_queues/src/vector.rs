@@ -37,7 +37,7 @@ impl<T: Copy> SeqlockVector<T> {
             + len * std::mem::size_of::<SeqLock<T>>()
     }
 
-    fn from_uninitialized_ptr(
+    pub fn from_uninitialized_ptr(
         ptr: *mut u8,
         len: usize,
     ) -> &'static Self {

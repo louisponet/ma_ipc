@@ -1,13 +1,18 @@
 [package]
 name = "ma_ffi"
-version = "0.1.0"
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+rust-version.workspace = true
 
 [lib]
-proc-macro=true
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+crate-type = ["cdylib"]
 
 [dependencies]
-proc-macro2.workspace =true
-quote.workspace = true
+ma_ffi_macro = {path = "../ma_ffi_macro/"}
+ma_queues = {path = "../ma_queues/", features=["shmem"]}
 
+thiserror.workspace = true

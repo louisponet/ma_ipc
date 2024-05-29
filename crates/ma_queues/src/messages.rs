@@ -31,100 +31,100 @@ impl Default for Message32 {
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message60 {
-    pub data: [u8; 60],
+pub struct Message56 {
+    pub data: [u8; 56],
 }
 
-impl Default for Message60 {
+impl Default for Message56 {
     fn default() -> Self {
-        Self { data: [0; 60] }
+        Self { data: [0; 56] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message124 {
-    pub data: [u8; 124],
+pub struct Message120 {
+    pub data: [u8; 120],
 }
-impl Default for Message124 {
+impl Default for Message120 {
     fn default() -> Self {
-        Self { data: [0; 124] }
+        Self { data: [0; 120] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message252 {
-    pub data: [u8; 252],
+pub struct Message248 {
+    pub data: [u8; 248],
 }
-impl Default for Message252 {
+impl Default for Message248 {
     fn default() -> Self {
-        Self { data: [0; 252] }
+        Self { data: [0; 248] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message508 {
-    pub data: [u8; 508],
+pub struct Message504 {
+    pub data: [u8; 504],
 }
-impl Default for Message508 {
+impl Default for Message504 {
     fn default() -> Self {
-        Self { data: [0; 508] }
+        Self { data: [0; 504] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message1020 {
-    pub data: [u8; 1020],
+pub struct Message1016 {
+    pub data: [u8; 1016],
 }
-impl Default for Message1020 {
+impl Default for Message1016 {
     fn default() -> Self {
-        Self { data: [0; 1020] }
+        Self { data: [0; 1016] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message2044 {
-    pub data: [u8; 2044],
+pub struct Message2040 {
+    pub data: [u8; 2040],
 }
-impl Default for Message2044 {
+impl Default for Message2040 {
     fn default() -> Self {
-        Self { data: [0; 2044] }
+        Self { data: [0; 2040] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message4092 {
-    pub data: [u8; 4092],
+pub struct Message4088 {
+    pub data: [u8; 4088],
 }
-impl Default for Message4092 {
+impl Default for Message4088 {
     fn default() -> Self {
-        Self { data: [0; 4092] }
+        Self { data: [0; 4088] }
     }
 }
 
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message1660 {
-    pub data: [u8; 1660],
+pub struct Message1656 {
+    pub data: [u8; 1656],
 }
-impl Default for Message1660 {
+impl Default for Message1656 {
     fn default() -> Self {
-        Self { data: [0; 1660] }
+        Self { data: [0; 1656] }
     }
 }
 #[derive(Clone, Copy,Debug)]
 #[repr(C)]
-pub struct Message7228 {
-    pub data: [u8; 7228],
+pub struct Message7224 {
+    pub data: [u8; 7224],
 }
-impl Default for Message7228 {
+impl Default for Message7224 {
     fn default() -> Self {
-        Self { data: [0; 7228] }
+        Self { data: [0; 7224] }
     }
 }
 #[repr(packed)]

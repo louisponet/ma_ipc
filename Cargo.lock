@@ -295,6 +295,15 @@ checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 name = "ma_ffi"
 version = "0.1.0"
 dependencies = [
+ "ma_ffi_macro",
+ "ma_queues",
+ "thiserror",
+]
+
+[[package]]
+name = "ma_ffi_macro"
+version = "0.1.0"
+dependencies = [
  "proc-macro2",
  "quote",
 ]
@@ -306,7 +315,6 @@ dependencies = [
  "core_affinity",
  "criterion",
  "log",
- "ma_ffi",
  "quanta",
  "shared_memory",
  "thiserror",
