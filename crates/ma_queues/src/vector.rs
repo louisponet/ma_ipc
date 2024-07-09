@@ -70,6 +70,11 @@ impl<T: Copy> SeqlockVector<T> {
         lock.write(item);
     }
 
+    pub fn write_multi(&self, pos: usize, item: &T) {
+        let lock = self.load(pos);
+        lock.write_multi(item);
+    }
+
     pub fn read(&self, pos: usize, result: &mut T) {
         let lock = self.load(pos);
         lock.read_no_ver(result);
@@ -131,7 +136,7 @@ impl<T: Clone + std::fmt::Debug> std::fmt::Debug for SeqlockVector<T> {
     }
 }
 
-struct VectorIterator<'a, T> {
+pub struct VectorIterator<'a, T> {
     vector: &'a SeqlockVector<T>,
     next_id: usize
 }
