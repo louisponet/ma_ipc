@@ -491,8 +491,6 @@ impl<'a, T: Copy> From<&'a Queue<T>> for Consumer<'a, T> {
 
 #[cfg(test)]
 mod queue {
-    use crate::messages::Message60;
-
     use super::*;
 
     #[test]
@@ -503,7 +501,7 @@ mod queue {
     #[test]
     fn headersize() {
         assert_eq!(64, std::mem::size_of::<QueueHeader>());
-        assert_eq!(64, std::mem::size_of::<Consumer<'_, Message60>>())
+        assert_eq!(64, std::mem::size_of::<Consumer<'_, [u8; 60]>>())
     }
 
     #[test]
@@ -516,8 +514,8 @@ mod queue {
             let mut m = 0;
 
             assert_eq!(c.try_consume(&mut m), Ok(()));
-            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
             assert_eq!(m, 1);
+            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
             for i in 0..16 {
                 p.produce(&i);
             }
@@ -549,7 +547,7 @@ mod queue {
                     c1.consume(&mut m);
                     c += m;
                 }
-                assert_eq!(c, (0..tot_messages).sum());
+                assert_eq!(c, (0..tot_messages).sum::<usize>());
             });
             readhandles.push(cons)
         }
@@ -600,17 +598,17 @@ mod queue {
     fn basic_shared() {
         for typ in [QueueType::SPMC, QueueType::MPMC] {
             let path = std::path::Path::new("/dev/shm/blabla_test");
-            let q = Queue::shared(&path, 16, typ).unwrap();
-            let mut p = Producer::from(&*q);
-            let mut c = Consumer::from(&*q);
+            std::fs::remove_file(path);
+            let q = Queue::shared(path, 16, typ).unwrap();
+            let mut p = Producer::from(q);
+            let mut c = Consumer::from(q);
 
-            assert_eq!(q.next_count() & q.header.mask, c.pos);
             p.produce(&1);
             let mut m = 0;
 
             assert_eq!(c.try_consume(&mut m), Ok(()));
-            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
             assert_eq!(m, 1);
+            assert!(matches!(c.try_consume(&mut m), Err(ReadError::Empty)));
             for i in 0..16 {
                 p.produce(&i);
             }

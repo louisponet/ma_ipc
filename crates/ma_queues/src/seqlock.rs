@@ -1,7 +1,8 @@
 use crate::messages::PublishArg;
+use std::arch::asm;
 use std::cell::UnsafeCell;
 use std::fmt;
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 
 use super::ReadError;
 //TODO: Make the types more rust like. I.e. on copy types -> copy on write/read, clone types -> copy std::mem::forget till read etc
@@ -9,7 +10,7 @@ use super::ReadError;
 #[repr(C, align(64))]
 pub struct SeqLock<T> {
     version: AtomicUsize,
-    data:    UnsafeCell<T>,
+    data: UnsafeCell<T>,
 }
 unsafe impl<T: Send> Send for SeqLock<T> {}
 unsafe impl<T: Send> Sync for SeqLock<T> {}
@@ -21,7 +22,7 @@ impl<T: Copy> SeqLock<T> {
     pub const fn new(val: T) -> SeqLock<T> {
         SeqLock {
             version: AtomicUsize::new(0),
-            data:    UnsafeCell::new(val),
+            data: UnsafeCell::new(val),
         }
     }
 
@@ -83,32 +84,36 @@ impl<T: Copy> SeqLock<T> {
     #[inline(never)]
     pub fn read_no_ver(&self, result: &mut T) {
         loop {
-            let v1 = self.version.load(Ordering::Relaxed);
+            let v1 = self.version.load(Ordering::Acquire);
+            compiler_fence(Ordering::AcqRel);
             unsafe {
-                (result as *mut T).copy_from(self.data.get(), 1);
+                *result = *self.data.get();
             }
-            let v2 = self.version.load(Ordering::Relaxed);
+            compiler_fence(Ordering::AcqRel);
+            let v2 = self.version.load(Ordering::Acquire);
             if v1 == v2 && v1 & 1 == 0 {
                 return;
             }
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn _write<F>(&self, f: F)
     where
         F: FnOnce(),
     {
         // Increment the sequence number. At this point, the number will be odd,
         // which will force readers to spin until we finish writing.
-        let v = self.version.load(Ordering::Relaxed);
-        self.version.store(v.wrapping_add(1),Ordering::Relaxed);
+        let v = self.version.fetch_add(1, Ordering::Release);
+        compiler_fence(Ordering::AcqRel);
         // Make sure any writes to the data happen after incrementing the
         // sequence number. What we ideally want is a store(Acquire), but the
         // Acquire ordering is not available on stores.
         f();
-        self.version.store(v.wrapping_add(2),Ordering::Relaxed);
+        compiler_fence(Ordering::AcqRel);
+        self.version.store(v.wrapping_add(2), Ordering::Release);
     }
+
     #[inline(never)]
     pub fn write(&self, val: &T) {
         self._write(|| {
@@ -116,6 +121,7 @@ impl<T: Copy> SeqLock<T> {
         });
     }
 
+    #[inline(never)]
     pub fn write_arg(&self, val: &PublishArg) {
         self._write(|| {
             let t = self.data.get() as *mut u8;
@@ -123,19 +129,22 @@ impl<T: Copy> SeqLock<T> {
         });
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn _write_unpoison<F>(&self, f: F)
     where
         F: FnOnce(),
     {
-        let v = self.version.load(Ordering::Relaxed).wrapping_sub(1) & 1;
-        self.version.store(v, Ordering::Relaxed);
+        let v = self.version.load(Ordering::Relaxed);
+        self.version.store(v.wrapping_add(v.wrapping_sub(1) & 1), Ordering::Release);
         // Make sure any writes to the data happen after incrementing the
         // sequence number. What we ideally want is a store(Acquire), but the
         // Acquire ordering is not available on stores.
+        compiler_fence(Ordering::AcqRel);
         f();
+        compiler_fence(Ordering::AcqRel);
         self.version.store(v.wrapping_add(1), Ordering::Relaxed);
     }
+
     #[inline(never)]
     pub fn write_unpoison(&self, val: &T) {
         self._write_unpoison(|| {
@@ -143,12 +152,39 @@ impl<T: Copy> SeqLock<T> {
             unsafe { t.copy_from(val as *const _ as *const u8, std::mem::size_of::<T>()) };
         });
     }
+
     #[inline(never)]
     pub fn write_unpoison_arg(&self, val: &PublishArg) {
         self._write_unpoison(|| unsafe {
             self.data
                 .get()
                 .copy_from(val.content as *const _, val.header.length as usize);
+        });
+    }
+
+    #[inline(always)]
+    #[allow(named_asm_labels)]
+    fn _write_multi<F>(&self, f: F)
+    where
+        F: FnOnce(),
+    {
+        // Increment the sequence number. At this point, the number will be odd,
+        // which will force readers to spin until we finish writing.
+        let mut v = self.version.fetch_or(1, Ordering::AcqRel);
+        while v & 1 == 1 {
+            v = self.version.fetch_or(1, Ordering::AcqRel);
+        }
+        // Make sure any writes to the data happen after incrementing the
+        // sequence number. What we ideally want is a store(Acquire), but the
+        // Acquire ordering is not available on stores.
+        f();
+        compiler_fence(Ordering::AcqRel);
+        self.version.store(v.wrapping_add(2), Ordering::Release);
+    }
+    #[inline(never)]
+    pub fn write_multi(&self, val: &T) {
+        self._write_multi(|| {
+            unsafe { self.data.get().copy_from(val as *const T, 1) };
         });
     }
 }
@@ -168,130 +204,116 @@ impl<T: Copy + fmt::Debug> fmt::Debug for SeqLock<T> {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use std::sync::atomic::AtomicBool;
+    use std::{
+        sync::atomic::AtomicBool,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn lock_size() {
         assert_eq!(std::mem::size_of::<SeqLock<[u8; 48]>>(), 64);
         assert_eq!(std::mem::size_of::<SeqLock<[u8; 61]>>(), 128)
     }
-    #[test]
-    fn read_no_ver() {
-        use crate::messages::Message60;
-        let lock = SeqLock::default();
-        let mut done = AtomicBool::new(false);
-        std::thread::scope(|s| {
-            let reader = s.spawn(|| {
-                core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
-                let mut m = Message60::default();
-                let mut count = 0u8;
-                let mut curver = 0;
-                let mut prevdat = 255;
-                let mut tot_read = 0;
-                while !done.load(Ordering::Relaxed) {
-                    let newver = lock.read_no_ver(&mut m);
-                    if newver > curver + 1 {
-                        tot_read += 1;
-                        if m.data[0] == 1 && m.data[1] == 2 {
-                            return tot_read;
-                        }
-                        for i in m.data {
-                            assert_eq!(count, i);
-                            assert_ne!(prevdat, i);
-                        }
-                        prevdat = m.data[0];
 
-                        count = count.wrapping_add(1);
-                        curver = newver;
-                    }
-                }
-                tot_read
+    fn consumer_loop<const N: usize>(lock: &SeqLock<[usize; N]>, done: &AtomicBool) {
+        let mut msg = [0usize; N];
+        while !done.load(Ordering::Relaxed) {
+            lock.read_no_ver(&mut msg);
+            let first = msg[0];
+            for i in msg {
+                assert_eq!(first, i);
+            }
+        }
+    }
+
+    fn producer_loop<const N: usize>(lock: &SeqLock<[usize; N]>, done: &AtomicBool, multi: bool) {
+        let curt = Instant::now();
+        let mut count = 0;
+        let mut msg = [0usize; N];
+        while curt.elapsed() < Duration::from_secs(1) {
+            msg.fill(count);
+            if multi {
+                lock.write_multi(&msg);
+            } else {
+                lock.write(&msg);
+            }
+            count = count.wrapping_add(1);
+        }
+        done.store(true, Ordering::Relaxed);
+    }
+
+    fn read_test<const N: usize>() {
+        let lock = SeqLock::new([0usize; N]);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                consumer_loop(&lock, &done);
             });
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let writer = s.spawn(|| {
-                core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
-                let curt = std::time::Instant::now();
-                let mut tot_written = 0;
-                let mut count = 0u8;
-                while curt.elapsed() < std::time::Duration::from_secs(10) {
-                    lock.write(&Message60 { data: [count; 60] });
-                    tot_written += 1;
-                    count = count.wrapping_add(1);
-                    std::thread::sleep(std::time::Duration::from_micros(20));
-                }
-                let mut data = [count; 60];
-                data[0] = 1;
-                data[1] = 2;
-                lock.write(&Message60 { data: data });
-                tot_written += 1;
-                done.store(true, Ordering::Relaxed);
-                tot_written
+            s.spawn(|| {
+                producer_loop(&lock, &done, false);
             });
-            assert_eq!(writer.join().unwrap(), reader.join().unwrap());
+        });
+    }
+
+    fn read_test_multi<const N: usize>() {
+        let lock = SeqLock::new([0usize; N]);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                consumer_loop(&lock, &done);
+            });
+            s.spawn(|| {
+                producer_loop(&lock, &done, true);
+            });
+            s.spawn(|| {
+                producer_loop(&lock, &done, true);
+            });
         });
     }
 
     #[test]
-    fn read() {
-        use crate::messages::Message1020;
-        let lock: SeqLock<Message1020> = SeqLock::default();
-        let mut m = Default::default();
-
-        let mut done = AtomicBool::new(false);
-
-        assert!(matches!(lock.read(&mut m, 2), Err(ReadError::Empty)));
-
-        std::thread::scope(|s| {
-            let consumer = s.spawn(|| {
-                let mut prev = 0;
-                let mut ver = 2;
-                let mut m = Message1020::default();
-                let mut tot_read = 0;
-                while !done.load(Ordering::Relaxed) {
-                    match lock.read(&mut m, ver) {
-                        Ok(()) => {
-                            if m.data[0] == 1 && m.data[1] == 2 {
-                                break;
-                            }
-                            assert!(m.data.iter().all(|d| *d == m.data[0]));
-                            prev = prev.max(m.data[0]);
-                            ver = ver.wrapping_add(2);
-                            tot_read += 1;
-                        }
-                        Err(ReadError::SpedPast) => {
-                            ver = ver.wrapping_add(2);
-                        }
-                        _ => {}
-                    }
-                }
-                assert!(prev > 0);
-                tot_read
-            });
-            let producer = s.spawn(|| {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                let curt = std::time::Instant::now();
-                let mut count = 0;
-                let mut tot = 0;
-                while curt.elapsed() < std::time::Duration::from_secs(1) {
-                    lock.write(&Message1020 {
-                        data: [count; 1020],
-                    });
-                    count = count.wrapping_add(1);
-                    tot += 1;
-                    std::thread::sleep(std::time::Duration::from_micros(500));
-                }
-                let mut data = [count; 1020];
-                data[0] = 1;
-                data[1] = 2;
-                lock.write(&Message1020 { data: data });
-                done.store(true, Ordering::Relaxed);
-                tot
-            });
-            assert_eq!(producer.join().unwrap(), consumer.join().unwrap())
-        });
+    fn read_16() {
+        read_test::<16>()
     }
+    #[test]
+    fn read_32() {
+        read_test::<32>()
+    }
+    #[test]
+    fn read_64() {
+        read_test::<64>()
+    }
+    #[test]
+    fn read_128() {
+        read_test::<128>()
+    }
+    #[test]
+    fn read_large() {
+        read_test::<65536>()
+    }
+
+    #[test]
+    fn read_16_multi() {
+        read_test_multi::<16>()
+    }
+    #[test]
+    fn read_32_multi() {
+        read_test_multi::<32>()
+    }
+    #[test]
+    fn read_64_multi() {
+        read_test_multi::<64>()
+    }
+    #[test]
+    fn read_128_multi() {
+        read_test_multi::<128>()
+    }
+    #[test]
+    fn read_large_multi() {
+        read_test_multi::<65536>()
+    }
+
     #[test]
     fn write_unpoison() {
         let lock = SeqLock::default();

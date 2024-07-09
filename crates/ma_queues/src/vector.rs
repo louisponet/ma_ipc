@@ -1,4 +1,4 @@
-use std::alloc::Layout;
+use std::{alloc::Layout, mem::MaybeUninit, ops::Index};
 use crate::seqlock::*;
 
 #[derive(Debug)]
@@ -75,8 +75,18 @@ impl<T: Copy> SeqlockVector<T> {
         lock.read_no_ver(result);
     }
 
+    pub fn read_copy(&self, pos: usize) -> T {
+        let mut out = unsafe {MaybeUninit::uninit().assume_init()};
+        let lock = self.load(pos);
+        lock.read_no_ver(&mut out);
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.header.bufsize as usize
+    }
+    pub fn iter(&self) -> VectorIterator<'_, T> {
+        VectorIterator{vector: self, next_id: 0}
     }
 }
 
@@ -120,3 +130,23 @@ impl<T: Clone + std::fmt::Debug> std::fmt::Debug for SeqlockVector<T> {
         write!(f, "SeqlockVector:\nHeader:\n{:?}", self.header)
     }
 }
+
+struct VectorIterator<'a, T> {
+    vector: &'a SeqlockVector<T>,
+    next_id: usize
+}
+
+impl<'a, T: Copy + Clone> Iterator for VectorIterator<'a, T>
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        if self.next_id >= self.vector.len() {
+            None
+        } else {
+            let out = self.vector.read_copy(self.next_id);
+            self.next_id = self.next_id.wrapping_add(1);
+            Some(out)
+        }
+
+}}
