@@ -110,6 +110,7 @@ impl<T: Copy> Queue<T> {
             let q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, len) as *mut Queue<T>);
             let elsize = size_of::<Seqlock<T>>();
             if !len.is_power_of_two() {
+                eprintln!("{len}");
                 return Err(QueueError::LengthNotPowerOfTwo);
             }
 
@@ -308,7 +309,6 @@ impl<'a, T: Copy> Producer<'a, T> {
             self.queue.produce(msg)
         }
     }
-
 }
 
 impl<'a, T> AsMut<Producer<'a, T>> for Producer<'a, T> {
@@ -321,10 +321,10 @@ impl<'a, T> AsMut<Producer<'a, T>> for Producer<'a, T> {
 #[derive(Debug)]
 pub struct Consumer<'a, T> {
     pub pos:              usize,        // 8
-    mask:             usize,        // 16
+    mask:                 usize,        // 16
     pub expected_version: usize,        // 24
-    is_running:       u8,           // 25
-    _pad:             [u8; 7],      // 32
+    is_running:           u8,           // 25
+    _pad:                 [u8; 7],      // 32
     pub queue:            &'a Queue<T>, // 48 fat ptr: (usize, pointer)
 }
 
@@ -360,8 +360,10 @@ impl<'a, T: Copy> Consumer<'a, T> {
                     return;
                 }
                 Err(ReadError::Empty) => {
-                    #[cfg(target_arch="x86_64")]
-                    unsafe {std::arch::x86_64::_mm_pause()};
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        std::arch::x86_64::_mm_pause()
+                    };
                     continue;
                 }
                 Err(ReadError::SpedPast) => {
