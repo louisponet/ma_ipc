@@ -33,50 +33,6 @@ impl<T: Copy> Seqlock<T> {
         self.version.load(Ordering::Relaxed)
     }
 
-    // Error returned if reader was sped past
-    // If version is lower -> writer not yet written and busylock
-    // if version is too high -> writer has written twice -> sped past -> error
-    // if version changed -> got sped past because if v1 != expected_version it wouldn't even have started
-    // reading
-    // #[inline(never)]
-    // pub fn read(&self, result: &mut T, expected_version: usize) -> Result<(), ReadError> {
-    //     loop {
-    //         // Load the first sequence number. The acquire ordering ensures that
-    //         // this is done before reading the data.
-    //         let v1 = self.version.load(Ordering::Relaxed);
-
-    //         // If the sequence number is odd then it means a writer is currently
-    //         // modifying the value.
-    //         // Version is fine, supposedly not being written + not written twice
-
-    //         // We need to use a volatile read here because the data may be
-    //         // concurrently modified by a writer. We also use MaybeUninit in
-    //         // case we read the data in the middle of a modification.
-    //         unsafe {
-    //             (result as *mut T).copy_from(self.data.get(), 1);
-    //         }
-    //         // Make sure the seq2 read occurs after reading the data. What we
-    //         // ideally want is a load(Release), but the Release ordering is not
-    //         // available on loads.
-
-    //         // If the sequence number is the same then the data wasn't modified
-    //         // while we were reading it, and can be returned.
-    //         let v2 = self.version.load(Ordering::Relaxed);
-    //         fence(Ordering::Acquire);
-    //         match v1 == v2 {
-    //             true if v1 == expected_version => {
-    //                 return Ok(());
-    //             }
-    //             true if v1 < expected_version => {
-    //                 return Err(ReadError::Empty);
-    //             }
-    //             true => {
-    //                 return Err(ReadError::SpedPast);
-    //             }
-    //             false => (),
-    //         }
-    //     }
-    // }
     #[inline(never)]
     pub fn read(&self, result: &mut T, expected_version: usize) -> Result<(), ReadError> {
         let v1 = self.version.load(Ordering::Acquire);
@@ -108,6 +64,8 @@ impl<T: Copy> Seqlock<T> {
             if v1 == v2 && v1 & 1 == 0 {
                 return;
             }
+            #[cfg(target_arch="x86_64")]
+            unsafe {_mm_pause()};
         }
     }
 

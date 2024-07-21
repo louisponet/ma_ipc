@@ -360,6 +360,8 @@ impl<'a, T: Copy> Consumer<'a, T> {
                     return;
                 }
                 Err(ReadError::Empty) => {
+                    #[cfg(target_arch="x86_64")]
+                    unsafe {std::arch::x86_64::_mm_pause()};
                     continue;
                 }
                 Err(ReadError::SpedPast) => {
