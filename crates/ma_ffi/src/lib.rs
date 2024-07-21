@@ -1,8 +1,9 @@
-use ma_queues::{messages::*, QueueType};
+use ma_queues::queue::QueueType;
 use ma_queues::vector::SeqlockVector;
-use ma_queues::{Consumer, Producer, Queue, QueueError, QueueHeader, ReadError};
-use std::ptr;
-use std::sync::atomic::Ordering::{self, SeqCst};
+use ma_queues::{
+    queue::{Consumer, Producer, Queue, QueueHeader},
+    QueueError, ReadError,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -61,7 +62,6 @@ where
     }
 }
 
-
 //Vector
 #[no_mangle]
 pub extern "C" fn SeqlockVectorSizeInBytes(
@@ -70,15 +70,15 @@ pub extern "C" fn SeqlockVectorSizeInBytes(
     vectorsize_in_bytes: &mut usize,
 ) -> FFIError {
     match msgsize_bytes {
-        56 => *vectorsize_in_bytes = SeqlockVector::<Message56>::size_of(len),
-        120 => *vectorsize_in_bytes = SeqlockVector::<Message120>::size_of(len),
-        248 => *vectorsize_in_bytes = SeqlockVector::<Message248>::size_of(len),
-        504 => *vectorsize_in_bytes = SeqlockVector::<Message504>::size_of(len),
-        1016 => *vectorsize_in_bytes = SeqlockVector::<Message1016>::size_of(len),
-        1656 => *vectorsize_in_bytes = SeqlockVector::<Message1656>::size_of(len),
-        2040 => *vectorsize_in_bytes = SeqlockVector::<Message2040>::size_of(len),
-        4088 => *vectorsize_in_bytes = SeqlockVector::<Message4088>::size_of(len),
-        7224 => *vectorsize_in_bytes = SeqlockVector::<Message7224>::size_of(len),
+        56 => *vectorsize_in_bytes = SeqlockVector::<[u8; 56]>::size_of(len),
+        120 => *vectorsize_in_bytes = SeqlockVector::<[u8; 120]>::size_of(len),
+        248 => *vectorsize_in_bytes = SeqlockVector::<[u8; 248]>::size_of(len),
+        504 => *vectorsize_in_bytes = SeqlockVector::<[u8; 504]>::size_of(len),
+        1016 => *vectorsize_in_bytes = SeqlockVector::<[u8; 1016]>::size_of(len),
+        1656 => *vectorsize_in_bytes = SeqlockVector::<[u8; 1656]>::size_of(len),
+        2040 => *vectorsize_in_bytes = SeqlockVector::<[u8; 2040]>::size_of(len),
+        4088 => *vectorsize_in_bytes = SeqlockVector::<[u8; 4088]>::size_of(len),
+        7224 => *vectorsize_in_bytes = SeqlockVector::<[u8; 7224]>::size_of(len),
         _ => return FFIError::UnsupportedMessageSize,
     }
     FFIError::Success
@@ -87,15 +87,33 @@ pub extern "C" fn SeqlockVectorSizeInBytes(
 #[no_mangle]
 pub extern "C" fn seqlockvector_size_in_bytes(ptr: *mut u8, msgsize_bytes: u32, len: usize) -> FFIError {
     match msgsize_bytes {
-        56   => {SeqlockVector::<Message56>::from_uninitialized_ptr(ptr, len);},
-        120  => {SeqlockVector::<Message120>::from_uninitialized_ptr(ptr, len);},
-        248  => {SeqlockVector::<Message248>::from_uninitialized_ptr(ptr, len);},
-        504  => {SeqlockVector::<Message504>::from_uninitialized_ptr(ptr, len);},
-        1016 => {SeqlockVector::<Message1016>::from_uninitialized_ptr(ptr, len);},
-        1656 => {SeqlockVector::<Message1656>::from_uninitialized_ptr(ptr, len);},
-        2040 => {SeqlockVector::<Message2040>::from_uninitialized_ptr(ptr, len);},
-        4088 => {SeqlockVector::<Message4088>::from_uninitialized_ptr(ptr, len);},
-        7224 => {SeqlockVector::<Message7224>::from_uninitialized_ptr(ptr, len);},
+        56 => {
+            SeqlockVector::<[u8; 56]>::from_uninitialized_ptr(ptr, len);
+        }
+        120 => {
+            SeqlockVector::<[u8; 120]>::from_uninitialized_ptr(ptr, len);
+        }
+        248 => {
+            SeqlockVector::<[u8; 248]>::from_uninitialized_ptr(ptr, len);
+        }
+        504 => {
+            SeqlockVector::<[u8; 504]>::from_uninitialized_ptr(ptr, len);
+        }
+        1016 => {
+            SeqlockVector::<[u8; 1016]>::from_uninitialized_ptr(ptr, len);
+        }
+        1656 => {
+            SeqlockVector::<[u8; 1656]>::from_uninitialized_ptr(ptr, len);
+        }
+        2040 => {
+            SeqlockVector::<[u8; 2040]>::from_uninitialized_ptr(ptr, len);
+        }
+        4088 => {
+            SeqlockVector::<[u8; 4088]>::from_uninitialized_ptr(ptr, len);
+        }
+        7224 => {
+            SeqlockVector::<[u8; 7224]>::from_uninitialized_ptr(ptr, len);
+        }
         _ => return FFIError::UnsupportedMessageSize,
     }
     FFIError::Success
@@ -104,23 +122,19 @@ pub extern "C" fn seqlockvector_size_in_bytes(ptr: *mut u8, msgsize_bytes: u32, 
 //Queues
 #[no_mangle]
 #[inline(always)]
-pub extern "C" fn queue_size_in_bytes(
-    msgsize_bytes: u32,
-    len: usize,
-    queuesize_in_bytes: &mut usize,
-) -> FFIError {
+pub extern "C" fn queue_size_in_bytes(msgsize_bytes: u32, len: usize, queuesize_in_bytes: &mut usize) -> FFIError {
     if !len.is_power_of_two() {
         return FFIError::QueueLengthNotPowerTwo;
     }
 
     match msgsize_bytes {
-        56 => *queuesize_in_bytes = Queue::<Message56>::size_of(len),
-        120 => *queuesize_in_bytes = Queue::<Message120>::size_of(len),
-        248 => *queuesize_in_bytes = Queue::<Message248>::size_of(len),
-        504 => *queuesize_in_bytes = Queue::<Message504>::size_of(len),
-        1016 => *queuesize_in_bytes = Queue::<Message1016>::size_of(len),
-        2040 => *queuesize_in_bytes = Queue::<Message2040>::size_of(len),
-        4088 => *queuesize_in_bytes = Queue::<Message4088>::size_of(len),
+        56 => *queuesize_in_bytes = Queue::<[u8; 56]>::size_of(len),
+        120 => *queuesize_in_bytes = Queue::<[u8; 120]>::size_of(len),
+        248 => *queuesize_in_bytes = Queue::<[u8; 248]>::size_of(len),
+        504 => *queuesize_in_bytes = Queue::<[u8; 504]>::size_of(len),
+        1016 => *queuesize_in_bytes = Queue::<[u8; 1016]>::size_of(len),
+        2040 => *queuesize_in_bytes = Queue::<[u8; 2040]>::size_of(len),
+        4088 => *queuesize_in_bytes = Queue::<[u8; 4088]>::size_of(len),
         _ => return FFIError::UnsupportedMessageSize,
     }
     FFIError::Success
@@ -128,20 +142,15 @@ pub extern "C" fn queue_size_in_bytes(
 
 #[no_mangle]
 #[inline(always)]
-pub extern "C" fn InitQueue(
-    ptr: *mut u8,
-    queue_type: QueueType,
-    msgsize_bytes: u32,
-    len: usize,
-) -> FFIError {
+pub extern "C" fn InitQueue(ptr: *mut u8, queue_type: QueueType, msgsize_bytes: u32, len: usize) -> FFIError {
     match msgsize_bytes {
-        56 => Queue::<Message56>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        120 => Queue::<Message120>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        248 => Queue::<Message248>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        504 => Queue::<Message504>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        1016 => Queue::<Message1016>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        2040 => Queue::<Message2040>::from_uninitialized_ptr(ptr, len, queue_type).into(),
-        4088 => Queue::<Message4088>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        56 => Queue::<[u8; 56]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        120 => Queue::<[u8; 120]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        248 => Queue::<[u8; 248]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        504 => Queue::<[u8; 504]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        1016 => Queue::<[u8; 1016]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        2040 => Queue::<[u8; 2040]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
+        4088 => Queue::<[u8; 4088]>::from_uninitialized_ptr(ptr, len, queue_type).into(),
         _ => return FFIError::UnsupportedMessageSize,
     }
 }

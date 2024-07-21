@@ -1,51 +1,40 @@
-use std::{alloc::Layout, mem::MaybeUninit, ops::Index};
+use std::{alloc::Layout, mem::MaybeUninit, path::Path};
+
 use crate::seqlock::*;
 
 #[derive(Debug)]
 #[repr(C)]
 pub struct VectorHeader {
-    elsize: usize,
-    bufsize: usize
+    elsize:  usize,
+    bufsize: usize,
 }
-// TODO: Multi producer writing, in versionedlock basically just add write safe using compare and swap
-/// This is a seqlocked vector, should only be written to by one producer
+
 #[repr(C, align(64))]
 pub struct SeqlockVector<T> {
     header: VectorHeader,
-    buffer: [SeqLock<T>],
+    buffer: [Seqlock<T>],
 }
 impl<T: Copy> SeqlockVector<T> {
     pub fn new(len: usize) -> &'static Self {
         // because we don't need len to be power of 2
-        let size = std::mem::size_of::<VectorHeader>()
-            + len * std::mem::size_of::<SeqLock<T>>();
+        let size = std::mem::size_of::<VectorHeader>() + len * std::mem::size_of::<Seqlock<T>>();
 
         unsafe {
-            let ptr = std::alloc::alloc_zeroed(
-                Layout::array::<u8>(size)
-                    .unwrap()
-                    .align_to(64)
-                    .unwrap()
-                    .pad_to_align(),
-            );
+            let ptr = std::alloc::alloc_zeroed(Layout::array::<u8>(size).unwrap().align_to(64).unwrap().pad_to_align());
             Self::from_uninitialized_ptr(ptr, len)
         }
     }
 
     pub const fn size_of(len: usize) -> usize {
-        std::mem::size_of::<VectorHeader>()
-            + len * std::mem::size_of::<SeqLock<T>>()
+        std::mem::size_of::<VectorHeader>() + len * std::mem::size_of::<Seqlock<T>>()
     }
 
-    pub fn from_uninitialized_ptr(
-        ptr: *mut u8,
-        len: usize,
-    ) -> &'static Self {
+    pub fn from_uninitialized_ptr(ptr: *mut u8, len: usize) -> &'static Self {
         unsafe {
-            // why len? because the size in the fat pointer ONLY cares about the unsized part of the struct
-            // i.e. the length of the buffer
+            // why len? because the size in the fat pointer ONLY cares about the unsized part of the
+            // struct i.e. the length of the buffer
             let q = &mut *(std::ptr::slice_from_raw_parts_mut(ptr, len) as *mut SeqlockVector<T>);
-            let elsize = std::mem::size_of::<SeqLock<T>>();
+            let elsize = std::mem::size_of::<Seqlock<T>>();
             q.header.bufsize = len;
             q.header.elsize = elsize;
             q
@@ -61,7 +50,7 @@ impl<T: Copy> SeqlockVector<T> {
     }
 
     //TODO: ErrorHandling
-    fn load(&self, pos: usize) -> &SeqLock<T> {
+    fn load(&self, pos: usize) -> &Seqlock<T> {
         unsafe { self.buffer.get_unchecked(pos) }
     }
 
@@ -81,7 +70,7 @@ impl<T: Copy> SeqlockVector<T> {
     }
 
     pub fn read_copy(&self, pos: usize) -> T {
-        let mut out = unsafe {MaybeUninit::uninit().assume_init()};
+        let mut out = unsafe { MaybeUninit::uninit().assume_init() };
         let lock = self.load(pos);
         lock.read_no_ver(&mut out);
         out
@@ -90,23 +79,17 @@ impl<T: Copy> SeqlockVector<T> {
     pub fn len(&self) -> usize {
         self.header.bufsize as usize
     }
+
     pub fn iter(&self) -> VectorIterator<'_, T> {
-        VectorIterator{vector: self, next_id: 0}
+        VectorIterator { vector: self, next_id: 0 }
     }
 }
 
 #[cfg(feature = "shmem")]
 impl<T: Copy> SeqlockVector<T> {
-    pub fn shared<P: AsRef<std::path::Path>>(
-        shmem_flink: P,
-        len: usize,
-    ) -> Result<&'static Self, &'static str> {
+    pub fn shared<P: AsRef<Path>>(shmem_flink: P, len: usize) -> Result<&'static Self, &'static str> {
         use shared_memory::{ShmemConf, ShmemError};
-        match ShmemConf::new()
-            .size(Self::size_of(len))
-            .flink(&shmem_flink)
-            .create()
-        {
+        match ShmemConf::new().size(Self::size_of(len)).flink(&shmem_flink).create() {
             Ok(shmem) => {
                 let ptr = shmem.as_ptr();
                 std::mem::forget(shmem);
@@ -124,9 +107,7 @@ impl<T: Copy> SeqlockVector<T> {
                     Ok(v)
                 }
             }
-            Err(_) => {
-                Err("Unable to create or open shmem flink.")
-            }
+            Err(_) => Err("Unable to create or open shmem flink."),
         }
     }
 }
@@ -137,12 +118,11 @@ impl<T: Clone + std::fmt::Debug> std::fmt::Debug for SeqlockVector<T> {
 }
 
 pub struct VectorIterator<'a, T> {
-    vector: &'a SeqlockVector<T>,
-    next_id: usize
+    vector:  &'a SeqlockVector<T>,
+    next_id: usize,
 }
 
-impl<'a, T: Copy + Clone> Iterator for VectorIterator<'a, T>
-{
+impl<'a, T: Copy + Clone> Iterator for VectorIterator<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -153,5 +133,5 @@ impl<'a, T: Copy + Clone> Iterator for VectorIterator<'a, T>
             self.next_id = self.next_id.wrapping_add(1);
             Some(out)
         }
-
-}}
+    }
+}

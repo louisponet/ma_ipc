@@ -13,6 +13,7 @@ log.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ma_time = {path = "../../../ma_timing/crates/ma_time"}
 criterion.workspace = true
 core_affinity.workspace = true
 quanta.workspace = true
