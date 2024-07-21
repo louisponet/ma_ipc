@@ -65,7 +65,7 @@ impl<T: Copy> Seqlock<T> {
                 return;
             }
             #[cfg(target_arch="x86_64")]
-            unsafe {_mm_pause()};
+            unsafe {std::arch::x86_64::_mm_pause()};
         }
     }
 
